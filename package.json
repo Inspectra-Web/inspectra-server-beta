@@ -1,0 +1,44 @@
+{
+  "name": "inspectra-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "INSPECTRA backend API - Express + MongoDB",
+  "type": "module",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "^1.13.11",
+    "mongoose": "^9.9.3",
+    "morgan": "^1.11.0",
+    "resend": "^6.25.0",
+    "validator": "^13.15.35",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^26.2.0",
+    "@types/validator": "^13.15.10",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
