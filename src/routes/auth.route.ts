@@ -56,8 +56,7 @@ router.post("/logout", logout);
 router.post("/forgot-password", strictLimiter, validate(emailOnlySchema), forgotPassword);
 router.patch("/reset-password", strictLimiter, validate(resetPasswordSchema), resetPassword);
 
-// protect per route, not router.use: a gate would answer 401 on unknown
-// /api/v1/auth paths instead of letting them fall through to notFound.
+
 router.get("/me", protect, getMe);
 router.patch(
   "/update-password",

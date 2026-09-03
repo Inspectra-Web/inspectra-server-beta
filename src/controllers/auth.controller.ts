@@ -1,15 +1,12 @@
 import type { CookieOptions, Request, Response } from "express";
 import jwt, { type SignOptions } from "jsonwebtoken";
-import { trusted, type HydratedDocument } from "mongoose";
+import { trusted } from "mongoose";
 
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
-import User, {
-  hashToken,
-  type IUser,
-  type IUserMethods,
-} from "../models/user.model.js";
+import User, { hashToken, publicUser, type UserDoc } from "../models/user.model.js";
 import { sendResetEmail, sendVerifyEmail } from "../services/email.service.js";
+import { ensureProfile } from "../services/profile.service.js";
 import type {
   EmailOnlyInput,
   LoginInput,
@@ -18,8 +15,6 @@ import type {
   UpdatePasswordInput,
   VerifyTokenInput,
 } from "../validators/auth.validator.js";
-
-type UserDoc = HydratedDocument<IUser, IUserMethods>;
 
 const isProduction = envConfig.NODE_ENV === "production";
 
@@ -31,19 +26,6 @@ const cookieOptions: CookieOptions = {
   sameSite: isProduction ? "none" : "lax",
   path: "/",
 };
-
-/** Response allowlist: the model has no toJSON transform, so shape it here. */
-const publicUser = (user: UserDoc) => ({
-  id: user._id,
-  fullname: user.fullname,
-  email: user.email,
-  role: user.role,
-  status: user.status,
-  avatar: user.avatar,
-  phone: user.phone,
-  emailVerified: user.emailVerified,
-  createdAt: user.createdAt,
-});
 
 const sendAuthCookie = (user: UserDoc, statusCode: number, res: Response): void => {
   const token = jwt.sign({ id: user._id.toString() }, envConfig.JWT_SECRET, {
@@ -63,6 +45,8 @@ export const register = async (req: Request, res: Response): Promise<void> => {
   const verifyToken = user.createEmailVerifyToken();
 
   await user.save();
+
+  await ensureProfile(user);
 
   await sendVerifyEmail(
     user.email,

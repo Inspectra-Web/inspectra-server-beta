@@ -1,8 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
 import { Error as MongooseError } from "mongoose";
+import { MulterError } from "multer";
 import { ZodError } from "zod";
 import envConfig from "../config/env.config.js";
 import AppError from "./app.error.js";
+import { AVATAR_MAX_MB } from "../services/upload.service.js";
 
 const handleCastError = (error: any) =>
   new AppError(`Invalid ${error.path}: ${error.value}`, 400);
@@ -21,6 +23,16 @@ const handleDuplicateKeyError = (error: any) => {
 const handleValidationError = (error: MongooseError.ValidationError) => {
   const messages = Object.values(error.errors).map((err) => err.message);
   return new AppError(messages.join(". "), 422);
+};
+
+const handleMulterError = (error: MulterError) => {
+  if (error.code === "LIMIT_FILE_SIZE")
+    return new AppError(`Image must be ${AVATAR_MAX_MB}MB or smaller.`, 413);
+
+  if (error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE")
+    return new AppError("Send a single image in the avatar field.", 400);
+
+  return new AppError(`Upload failed: ${error.message}`, 400);
 };
 
 const handleJwtError = () =>
@@ -60,6 +72,7 @@ const globalErrorHandler = (
     if (error.name === "JsonWebTokenError") error = handleJwtError();
     if (error.name === "TokenExpiredError") error = handleJwtExpiredError();
     if (error instanceof ZodError) error = handleZodError(error);
+    if (error instanceof MulterError) error = handleMulterError(error);
   }
 
   if (envConfig.NODE_ENV === "development") {

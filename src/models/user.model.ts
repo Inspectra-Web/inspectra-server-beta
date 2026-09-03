@@ -1,4 +1,4 @@
-import { Schema, model, type Model } from "mongoose";
+import { Schema, model, type HydratedDocument, type Model, type Types } from "mongoose";
 import { createHash, randomBytes } from "crypto";
 import { compare, hash } from "bcryptjs";
 import validator from "validator";
@@ -19,6 +19,8 @@ export interface IUser {
   status: "active" | "suspended" | "pending";
   phone?: string;
   avatar: string;
+  avatarId?: string;
+  profile?: Types.ObjectId;
   emailVerified: boolean;
   emailVerifyToken?: string;
   emailVerifyExpires?: Date;
@@ -77,6 +79,11 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     },
     phone: { type: String, trim: true },
     avatar: { type: String, default: "" },
+    // The uploaded image's Cloudinary id, kept so a replacement can delete the
+    // one it replaces. Lives beside the URL it belongs to, not on the profile.
+    avatarId: { type: String, default: "" },
+    // Everything auth does not need lives on the profile. Set once, at register.
+    profile: { type: Schema.Types.ObjectId, ref: "Profile" },
     emailVerified: { type: Boolean, default: false },
     emailVerifyToken: { type: String, select: false },
     emailVerifyExpires: { type: Date, select: false },
@@ -123,6 +130,22 @@ userSchema.methods.createEmailVerifyToken = function () {
 
   return verifyToken;
 };
+
+export type UserDoc = HydratedDocument<IUser, IUserMethods>;
+
+/** Response allowlist: the schema has no toJSON transform, so shape it here.
+ *  `avatarId` and `profile` stay out; they are plumbing, not the account. */
+export const publicUser = (user: UserDoc) => ({
+  id: user._id,
+  fullname: user.fullname,
+  email: user.email,
+  role: user.role,
+  status: user.status,
+  avatar: user.avatar,
+  phone: user.phone,
+  emailVerified: user.emailVerified,
+  createdAt: user.createdAt,
+});
 
 const User = model<IUser, UserModel>("User", userSchema);
 
