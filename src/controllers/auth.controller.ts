@@ -1,12 +1,12 @@
-import type { CookieOptions, Request, Response } from "express";
-import jwt, { type SignOptions } from "jsonwebtoken";
+import type { Request, Response } from "express";
 import { trusted } from "mongoose";
 
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
-import User, { hashToken, publicUser, type UserDoc } from "../models/user.model.js";
+import User, { hashToken, publicUser } from "../models/user.model.js";
 import { sendResetEmail, sendVerifyEmail } from "../services/email.service.js";
 import { ensureProfile } from "../services/profile.service.js";
+import { cookieOptions, sendAuthCookie } from "../services/token.service.js";
 import type {
   EmailOnlyInput,
   LoginInput,
@@ -15,28 +15,6 @@ import type {
   UpdatePasswordInput,
   VerifyTokenInput,
 } from "../validators/auth.validator.js";
-
-const isProduction = envConfig.NODE_ENV === "production";
-
-// Shared so logout clears the cookie with the same attributes it was set with.
-// A mismatch on path, secure or sameSite leaves the cookie in place.
-const cookieOptions: CookieOptions = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: isProduction ? "none" : "lax",
-  path: "/",
-};
-
-const sendAuthCookie = (user: UserDoc, statusCode: number, res: Response): void => {
-  const token = jwt.sign({ id: user._id.toString() }, envConfig.JWT_SECRET, {
-    expiresIn: envConfig.JWT_EXPIRES_IN as SignOptions["expiresIn"],
-  });
-
-  const maxAge = Number(envConfig.JWT_COOKIE_EXPIRES_DAYS) * 24 * 60 * 60 * 1000;
-
-  res.cookie("jwt", token, { ...cookieOptions, maxAge });
-  res.status(statusCode).json({ status: "success", data: { user: publicUser(user) } });
-};
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   const { fullname, email, password, role }: RegisterInput = req.body;
@@ -120,6 +98,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   // After the password check, so it tells an attacker nothing they lack.
   if (!user.emailVerified)
     throw new AppError("Please verify your email address before logging in.", 403);
+
+  if (user.role === "admin")
+    throw new AppError("Admins sign in at the admin console.", 403);
 
   await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
