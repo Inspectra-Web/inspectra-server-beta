@@ -16,6 +16,9 @@ const envConfig = {
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY!,
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET!,
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME!,
+  DOJAH_BASE_URL: process.env.DOJAH_BASE_URL!,
+  DOJAH_APP_ID: process.env.DOJAH_APP_ID!,
+  DOJAH_SECRET_KEY: process.env.DOJAH_SECRET_KEY!,
   // Read only by src/scripts/admin.script.ts, which checks them itself.
   ADMIN_EMAIL: process.env.ADMIN_EMAIL,
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
