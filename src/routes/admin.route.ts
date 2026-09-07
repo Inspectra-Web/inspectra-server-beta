@@ -5,6 +5,7 @@ import {
   adminLogin,
   getAdminSession,
   getUser,
+  listRealtors,
   listUsers,
   updateUserStatus,
 } from "../controllers/admin.controller.js";
@@ -32,6 +33,8 @@ router.post("/login", adminLimiter, validate(loginSchema), adminLogin);
 router.get("/session", protect, restrictTo("admin"), getAdminSession);
 
 router.get("/users", protect, restrictTo("admin"), listUsers);
+
+router.get("/realtors", protect, restrictTo("admin"), listRealtors);
 
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
 

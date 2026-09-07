@@ -30,3 +30,19 @@ export const userStatusSchema = z.strictObject({
 });
 
 export type UserStatusInput = z.infer<typeof userStatusSchema>;
+
+export const listRealtorsSchema = z.object({
+  q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+  certified: z.enum(["all", "yes", "no"]).default("all"),
+  identity: z.enum(["all", "verified", "unverified"]).default("all"),
+  status: z.enum(["all", "active", "suspended", "pending"]).default("all"),
+  page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+    .default(PAGE_SIZE),
+});
+
+export type ListRealtorsQuery = z.infer<typeof listRealtorsSchema>;
