@@ -10,6 +10,7 @@ import adminRoute from "../routes/admin.route.js";
 import authRoute from "../routes/auth.route.js";
 import identityRoute from "../routes/identity.route.js";
 import profileRoute from "../routes/profile.route.js";
+import realtorRoute from "../routes/realtor.route.js";
 
 const appConfig = (app: Express): void => {
   app.set("trust proxy", 1);
@@ -30,6 +31,7 @@ const appConfig = (app: Express): void => {
   app.use("/api/v1/auth", authRoute);
   app.use("/api/v1/profile", profileRoute);
   app.use("/api/v1/identity", identityRoute);
+  app.use("/api/v1/realtors", realtorRoute);
   app.use("/api/v1/admin", adminRoute);
 
   app.use(notFound);
