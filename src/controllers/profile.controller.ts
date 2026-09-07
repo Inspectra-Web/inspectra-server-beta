@@ -1,49 +1,15 @@
 import type { Request, Response } from "express";
 
 import AppError from "../error/app.error.js";
-import Profile from "../models/profile.model.js";
+import Profile, { publicProfile } from "../models/profile.model.js";
 import User, { publicUser } from "../models/user.model.js";
-import {
-  composeName,
-  ensureProfile,
-  type ProfileDoc,
-} from "../services/profile.service.js";
+import { composeName, ensureProfile } from "../services/profile.service.js";
 import { destroyAvatar, uploadAvatar } from "../services/upload.service.js";
 import {
   REALTOR_FIELDS,
   SEEKER_FIELDS,
   type UpdateProfileInput,
 } from "../validators/profile.validator.js";
-
-const publicProfile = (profile: ProfileDoc) => ({
-  id: profile._id,
-  firstName: profile.firstName,
-  lastName: profile.lastName,
-  middleName: profile.middleName,
-  bio: profile.bio,
-  gender: profile.gender,
-  address: profile.address,
-  city: profile.city,
-  state: profile.state,
-  country: profile.country,
-  whatsapp: profile.whatsapp,
-  language: profile.language,
-  jobTitle: profile.jobTitle,
-  agencyName: profile.agencyName,
-  agencyAddress: profile.agencyAddress,
-  region: profile.region,
-  experience: profile.experience,
-  specialization: profile.specialization,
-  availabilityStatus: profile.availabilityStatus,
-  contactMeans: profile.contactMeans,
-  socials: profile.socials,
-  certified: profile.certified,
-  preferredCity: profile.preferredCity,
-  propertyCategories: profile.propertyCategories,
-  propertyInterests: profile.propertyInterests,
-  createdAt: profile.createdAt,
-  updatedAt: profile.updatedAt,
-});
 
 const forbiddenFor = (role: string) => {
   if (role === "realtor") return SEEKER_FIELDS;

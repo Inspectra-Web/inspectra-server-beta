@@ -1,4 +1,4 @@
-import { Schema, model, type Types } from "mongoose";
+import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 import {
   PROPERTY_CATEGORIES,
   PROPERTY_TYPES,
@@ -148,6 +148,40 @@ const profileSchema = new Schema<IProfile>(
   },
   { timestamps: true },
 );
+
+export type ProfileDoc = HydratedDocument<IProfile>;
+
+/** Response allowlist: the schema has no toJSON transform, so shape it here.
+ *  `user` stays out; it is the link back to the account, not part of the profile. */
+export const publicProfile = (profile: ProfileDoc) => ({
+  id: profile._id,
+  firstName: profile.firstName,
+  lastName: profile.lastName,
+  middleName: profile.middleName,
+  bio: profile.bio,
+  gender: profile.gender,
+  address: profile.address,
+  city: profile.city,
+  state: profile.state,
+  country: profile.country,
+  whatsapp: profile.whatsapp,
+  language: profile.language,
+  jobTitle: profile.jobTitle,
+  agencyName: profile.agencyName,
+  agencyAddress: profile.agencyAddress,
+  region: profile.region,
+  experience: profile.experience,
+  specialization: profile.specialization,
+  availabilityStatus: profile.availabilityStatus,
+  contactMeans: profile.contactMeans,
+  socials: profile.socials,
+  certified: profile.certified,
+  preferredCity: profile.preferredCity,
+  propertyCategories: profile.propertyCategories,
+  propertyInterests: profile.propertyInterests,
+  createdAt: profile.createdAt,
+  updatedAt: profile.updatedAt,
+});
 
 const Profile = model<IProfile>("Profile", profileSchema);
 

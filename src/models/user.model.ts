@@ -95,6 +95,8 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
   { timestamps: true },
 );
 
+userSchema.index({ role: 1, status: 1, createdAt: -1 });
+
 userSchema.pre("save", async function () {
   if (!this.isModified("password")) return;
 

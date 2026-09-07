@@ -1,9 +1,5 @@
-import type { HydratedDocument } from "mongoose";
-
-import Profile, { type IProfile } from "../models/profile.model.js";
+import Profile, { type ProfileDoc } from "../models/profile.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
-
-export type ProfileDoc = HydratedDocument<IProfile>;
 
 const capitalize = (word: string): string =>
   word ? `${word[0]!.toUpperCase()}${word.slice(1)}` : "";

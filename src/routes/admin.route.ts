@@ -1,7 +1,12 @@
 import { Router, type RequestHandler } from "express";
 import rateLimit from "express-rate-limit";
 
-import { adminLogin, getAdminSession } from "../controllers/admin.controller.js";
+import {
+  adminLogin,
+  getAdminSession,
+  getUser,
+  listUsers,
+} from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -23,5 +28,9 @@ const router = Router();
 router.post("/login", adminLimiter, validate(loginSchema), adminLogin);
 
 router.get("/session", protect, restrictTo("admin"), getAdminSession);
+
+router.get("/users", protect, restrictTo("admin"), listUsers);
+
+router.get("/users/:id", protect, restrictTo("admin"), getUser);
 
 export default router;
