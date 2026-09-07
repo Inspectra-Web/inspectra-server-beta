@@ -6,10 +6,12 @@ import {
   getAdminSession,
   getUser,
   listUsers,
+  updateUserStatus,
 } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
+import { userStatusSchema } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
 
 const tooManyAttempts: RequestHandler = (_req, _res, next) =>
@@ -32,5 +34,13 @@ router.get("/session", protect, restrictTo("admin"), getAdminSession);
 router.get("/users", protect, restrictTo("admin"), listUsers);
 
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
+
+router.patch(
+  "/users/:id/status",
+  protect,
+  restrictTo("admin"),
+  validate(userStatusSchema),
+  updateUserStatus,
+);
 
 export default router;

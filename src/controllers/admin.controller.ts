@@ -5,7 +5,11 @@ import AppError from "../error/app.error.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
 import User, { publicUser, type IUser } from "../models/user.model.js";
 import { sendAuthCookie } from "../services/token.service.js";
-import { listUsersSchema, userIdSchema } from "../validators/admin.validator.js";
+import {
+  listUsersSchema,
+  userIdSchema,
+  type UserStatusInput,
+} from "../validators/admin.validator.js";
 import type { LoginInput } from "../validators/auth.validator.js";
 
 export const adminLogin = async (req: Request, res: Response): Promise<void> => {
@@ -148,5 +152,29 @@ export const getUser = async (req: Request, res: Response): Promise<void> => {
       user: publicUser(user),
       profile: profile ? publicProfile(profile) : null,
     },
+  });
+};
+
+export const updateUserStatus = async (req: Request, res: Response): Promise<void> => {
+  const { id } = userIdSchema.parse(req.params);
+  const { status }: UserStatusInput = req.body;
+
+  const user = await User.findById(id);
+
+  if (!user) throw new AppError("No user with that id.", 404);
+
+  if (user.role === "admin")
+    throw new AppError("An admin account's status cannot be changed here.", 403);
+
+  if (user.status === status)
+    throw new AppError(`This account is already ${status}.`, 409);
+
+  user.status = status;
+  await user.save({ validateModifiedOnly: true });
+
+  res.status(200).json({
+    status: "success",
+    message: status === "suspended" ? "Account suspended." : "Account reactivated.",
+    data: { user: publicUser(user) },
   });
 };
