@@ -4,7 +4,11 @@ import { MulterError } from "multer";
 import { ZodError } from "zod";
 import envConfig from "../config/env.config.js";
 import AppError from "./app.error.js";
-import { AVATAR_MAX_MB } from "../services/upload.service.js";
+import {
+  AVATAR_MAX_MB,
+  DOCUMENT_MAX_MB,
+  PHOTO_MAX_MB,
+} from "../services/upload.service.js";
 
 const handleCastError = (error: any) =>
   new AppError(`Invalid ${error.path}: ${error.value}`, 400);
@@ -25,12 +29,22 @@ const handleValidationError = (error: MongooseError.ValidationError) => {
   return new AppError(messages.join(". "), 422);
 };
 
+// The cap depends on what was being uploaded, and only the field name says which.
+const SIZE_LIMITS: Record<string, number> = {
+  avatar: AVATAR_MAX_MB,
+  selfie: AVATAR_MAX_MB,
+  photos: PHOTO_MAX_MB,
+  document: DOCUMENT_MAX_MB,
+};
+
 const handleMulterError = (error: MulterError) => {
-  if (error.code === "LIMIT_FILE_SIZE")
-    return new AppError(`Image must be ${AVATAR_MAX_MB}MB or smaller.`, 413);
+  if (error.code === "LIMIT_FILE_SIZE") {
+    const limit = SIZE_LIMITS[error.field ?? ""] ?? AVATAR_MAX_MB;
+    return new AppError(`Each file must be ${limit}MB or smaller.`, 413);
+  }
 
   if (error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE")
-    return new AppError("Send a single image in the avatar field.", 400);
+    return new AppError(`Too many files, or an unexpected "${error.field}" field.`, 400);
 
   return new AppError(`Upload failed: ${error.message}`, 400);
 };
