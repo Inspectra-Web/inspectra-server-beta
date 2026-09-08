@@ -4,10 +4,17 @@ import type { PipelineStage, Types } from "mongoose";
 import AppError from "../error/app.error.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
+import Property, {
+  detailedProperty,
+  type ListingStatus,
+  type VerificationStatus,
+} from "../models/property.model.js";
 import User, { publicUser, type IUser } from "../models/user.model.js";
 import { sendAuthCookie } from "../services/token.service.js";
 import {
+  listListingsSchema,
   listRealtorsSchema,
+  listingIdSchema,
   listUsersSchema,
   userIdSchema,
   type UserStatusInput,
@@ -310,6 +317,177 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
       limit,
       total,
       pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+/** A listings row: the property, plus the realtor who owns it. */
+interface ListingRow {
+  _id: Types.ObjectId;
+  ref: string;
+  title: string;
+  price: number;
+  listingStatus: ListingStatus;
+  status: VerificationStatus;
+  city: string;
+  fullAddress: string;
+  image: string;
+  realtorId?: Types.ObjectId;
+  realtorName: string;
+  createdAt: Date;
+}
+
+interface ListingPage {
+  rows: ListingRow[];
+  total: { count: number }[];
+  cities: { _id: string }[];
+}
+
+const listingRow = (row: ListingRow) => ({
+  id: row._id,
+  ref: row.ref,
+  title: row.title,
+  price: row.price,
+  listingStatus: row.listingStatus,
+  status: row.status,
+  city: row.city,
+  fullAddress: row.fullAddress,
+  image: row.image,
+  realtorId: row.realtorId,
+  realtorName: row.realtorName,
+  createdAt: row.createdAt,
+});
+
+export const listListings = async (req: Request, res: Response): Promise<void> => {
+  const { q, status, city, page, limit } = listListingsSchema.parse(req.query);
+
+  // Status filters before the lookup, so the join runs over the matched set.
+  const pipeline: PipelineStage[] = [];
+
+  if (status !== "all") pipeline.push({ $match: { "verification.status": status } });
+
+  pipeline.push(
+    {
+      $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" },
+    },
+    { $unwind: { path: "$realtor", preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        status: "$verification.status",
+        city: { $ifNull: ["$address.city", ""] },
+        fullAddress: { $ifNull: ["$address.fullAddress", ""] },
+        image: { $ifNull: [{ $first: "$images.url" }, ""] },
+        realtorId: "$realtor._id",
+        realtorName: { $ifNull: ["$realtor.fullname", ""] },
+      },
+    },
+  );
+
+  // The realtor's name is searchable too: it is the column an admin scans by.
+  if (q) {
+    const pattern = new RegExp(escapeRegex(q), "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { title: pattern },
+          { ref: pattern },
+          { fullAddress: pattern },
+          { city: pattern },
+          { realtorName: pattern },
+        ],
+      },
+    });
+  }
+
+  // Repeated in both branches so the city list is not narrowed by the city already
+  // chosen, which would empty the dropdown after one pick.
+  const cityMatch: PipelineStage.FacetPipelineStage[] =
+    city === "all" ? [] : [{ $match: { city } }];
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...cityMatch,
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        {
+          $project: {
+            ref: 1,
+            title: 1,
+            price: 1,
+            listingStatus: 1,
+            status: 1,
+            city: 1,
+            fullAddress: 1,
+            image: 1,
+            realtorId: 1,
+            realtorName: 1,
+            createdAt: 1,
+          },
+        },
+      ],
+      total: [...cityMatch, { $count: "count" }],
+      cities: [
+        { $match: { city: { $ne: "" } } },
+        { $group: { _id: "$city" } },
+        { $sort: { _id: 1 } },
+      ],
+    },
+  });
+
+  const [result] = await Property.aggregate<ListingPage>(pipeline);
+
+  const rows = result?.rows ?? [];
+  const total = result?.total[0]?.count ?? 0;
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      listings: rows.map(listingRow),
+      cities: (result?.cities ?? []).map((c) => c._id),
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+/**
+ * One listing in full, plus who listed it. The realtor block is deliberately small:
+ * the console links through to their account for the rest, and an admin reading a
+ * property does not need their contact card inlined.
+ */
+export const getListing = async (req: Request, res: Response): Promise<void> => {
+  const { id } = listingIdSchema.parse(req.params);
+
+  const property = await Property.findById(id);
+
+  if (!property) throw new AppError("No listing with that id.", 404);
+
+  const [owner, profile, identity] = await Promise.all([
+    User.findById(property.user),
+    Profile.findOne({ user: property.user }),
+    Identity.findOne({ user: property.user }),
+  ]);
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      listing: detailedProperty(property),
+      // Null for a listing whose account has since been removed.
+      realtor: owner && {
+        id: owner._id,
+        fullname: owner.fullname,
+        email: owner.email,
+        avatar: owner.avatar,
+        status: owner.status,
+        agencyName: profile?.agencyName ?? "",
+        city: profile?.city ?? "",
+        certified: profile?.certified ?? false,
+        identityVerified: identity?.verified ?? false,
+      },
     },
   });
 };

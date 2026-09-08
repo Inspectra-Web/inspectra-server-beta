@@ -5,6 +5,8 @@ import {
   adminLogin,
   getAdminSession,
   getUser,
+  getListing,
+  listListings,
   listRealtors,
   listUsers,
   updateUserStatus,
@@ -35,6 +37,10 @@ router.get("/session", protect, restrictTo("admin"), getAdminSession);
 router.get("/users", protect, restrictTo("admin"), listUsers);
 
 router.get("/realtors", protect, restrictTo("admin"), listRealtors);
+
+router.get("/listings", protect, restrictTo("admin"), listListings);
+
+router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
 
