@@ -29,7 +29,7 @@ export type ListingStatus =
  */
 export type VerificationStatus = "pending" | "verified" | "disputed";
 
-/** Per-document outcome. "Missing" is derived from the required list, never stored. */
+/** Per-document outcome, set by the admin reviewing the dossier. */
 export type DocumentStatus = "pending" | "verified" | "flagged";
 
 export type LegalDocumentName =
@@ -111,8 +111,12 @@ export interface PropertyMedia {
 }
 
 export interface LegalDocument {
+  _id?: Types.ObjectId;
   name: LegalDocumentName;
+  // The realtor's line about the document.
   notes: string;
+  // The reviewer's line about why it was flagged. Never public.
+  reason: string;
   fileUrl: string;
   publicId: string;
   status: DocumentStatus;
@@ -300,6 +304,7 @@ const propertySchema = new Schema<IProperty>(
             },
           },
           notes: text(),
+          reason: text(),
           fileUrl: text(),
           publicId: text(),
           status: {
@@ -384,8 +389,12 @@ propertySchema.pre("validate", function (this: PropertyDoc) {
 
 /**
  * The whole listing, for the two people entitled to see it: the realtor who owns it
- * and the admin reviewing it. Carries the document files and the reviewer's note,
- * which `publicProperty` below withholds. The reviewer's own id stays out of both.
+ * and the admin reviewing it. Carries the reviewer's note, which `publicProperty`
+ * below withholds. The reviewer's own id stays out of both.
+ *
+ * A document's `fileUrl` stays out too. A Cloudinary link is public and permanent to
+ * anyone it reaches, so the file is served through `/properties/:id/documents/:docId/file`
+ * instead, which authorises the reader and streams it inline. `id` is the handle for that.
  */
 export const detailedProperty = (property: PropertyDoc) => ({
   id: property._id,
@@ -403,9 +412,10 @@ export const detailedProperty = (property: PropertyDoc) => ({
   videoUrl: property.videoUrl,
   video: property.video.url,
   documents: property.documents.map((doc) => ({
+    id: doc._id,
     name: doc.name,
     notes: doc.notes,
-    fileUrl: doc.fileUrl,
+    reason: doc.reason,
     status: doc.status,
     issuedDate: doc.issuedDate,
     size: doc.size,

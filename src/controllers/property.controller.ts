@@ -1,3 +1,7 @@
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream } from "node:stream/web";
+
 import type { Request, Response } from "express";
 import { trusted, type QueryFilter, type Types } from "mongoose";
 
@@ -8,10 +12,16 @@ import Property, {
   type PropertyDoc,
   type VerificationStatus,
 } from "../models/property.model.js";
-import { destroyAsset, uploadDocument, uploadPhoto } from "../services/upload.service.js";
+import {
+  destroyAsset,
+  isPdf,
+  uploadDocument,
+  uploadPhoto,
+} from "../services/upload.service.js";
 import {
   addDocumentSchema,
   listPropertiesSchema,
+  documentIdSchema,
   propertyIdSchema,
   typeFitsCategory,
   type AddDocumentInput,
@@ -112,6 +122,22 @@ const findOwned = async (id: string, owner: Types.ObjectId): Promise<PropertyDoc
   return property;
 };
 
+/**
+ * A changed listing is no longer the listing that was checked, so the badge goes back
+ * to pending rather than surviving a change to the asset behind it. Per-document
+ * verdicts are left alone: those files did not change.
+ */
+const sendBackForReview = (property: PropertyDoc): boolean => {
+  if (property.verification.status === "pending") return false;
+
+  property.verification.status = "pending";
+  property.verification.note = "";
+  property.verification.reviewedAt = undefined;
+  property.verification.reviewedBy = undefined;
+
+  return true;
+};
+
 export const createProperty = async (req: Request, res: Response): Promise<void> => {
   const body: CreatePropertyInput = req.body;
 
@@ -195,9 +221,11 @@ export const updateMyProperty = async (req: Request, res: Response): Promise<voi
 
   if (documents) {
     for (const doc of property.documents)
-      if (!documents.includes(doc.fileUrl)) dropped.push(doc.publicId);
+      if (!documents.includes(String(doc._id))) dropped.push(doc.publicId);
 
-    property.documents = property.documents.filter((doc) => documents.includes(doc.fileUrl));
+    property.documents = property.documents.filter((doc) =>
+      documents.includes(String(doc._id)),
+    );
   }
 
   // The validator can only check the pair when a request carries both halves. Here
@@ -208,16 +236,7 @@ export const updateMyProperty = async (req: Request, res: Response): Promise<voi
       422,
     );
 
-  // An edited listing is no longer the listing that was checked, so the badge goes
-  // back to pending rather than surviving a change to the asset behind it.
-  const recheck = property.isModified() && property.verification.status !== "pending";
-
-  if (recheck) {
-    property.verification.status = "pending";
-    property.verification.note = "";
-    property.verification.reviewedAt = undefined;
-    property.verification.reviewedBy = undefined;
-  }
+  const recheck = property.isModified() && sendBackForReview(property);
 
   await property.save();
 
@@ -255,11 +274,16 @@ export const addPropertyPhotos = async (req: Request, res: Response): Promise<vo
 
   property.images.push(...uploaded.map(({ url, publicId }) => ({ url, publicId })));
 
+  // New photos change the asset behind the badge, so the same rule as an edit applies.
+  const recheck = sendBackForReview(property);
+
   await property.save();
+
+  const added = `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added.`;
 
   res.status(201).json({
     status: "success",
-    message: `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added.`,
+    message: recheck ? `${added} The listing goes back for verification.` : added,
     data: { property: detailedProperty(property) },
   });
 };
@@ -269,6 +293,10 @@ export const addPropertyDocument = async (req: Request, res: Response): Promise<
   const { name, notes, issuedDate }: AddDocumentInput = req.body;
 
   if (!req.file) throw new AppError("Choose a document to upload.", 400);
+
+  // The multer filter trusts the browser's mimetype. The header bytes are the real check.
+  if (!isPdf(req.file.buffer))
+    throw new AppError("That file is not a PDF. Save the document as a PDF and try again.", 400);
 
   const property = await findOwned(id, req.user!._id);
 
@@ -280,6 +308,7 @@ export const addPropertyDocument = async (req: Request, res: Response): Promise<
   property.documents.push({
     name,
     notes,
+    reason: "",
     fileUrl: url,
     publicId,
     status: "pending",
@@ -287,11 +316,15 @@ export const addPropertyDocument = async (req: Request, res: Response): Promise<
     size: bytes,
   });
 
+  const recheck = sendBackForReview(property);
+
   await property.save();
 
   res.status(201).json({
     status: "success",
-    message: `${name} added. It goes to the verification team.`,
+    message: recheck
+      ? `${name} added. The listing goes back for verification.`
+      : `${name} added. It goes to the verification team.`,
     data: { property: detailedProperty(property) },
   });
 };
@@ -316,4 +349,57 @@ export const deleteMyProperty = async (req: Request, res: Response): Promise<voi
     message: "Listing deleted.",
     data: { id: property._id },
   });
+};
+
+/**
+ * The document itself, streamed rather than linked. The Cloudinary URL never reaches a
+ * client, so this is the only way to read a title document, and it authorises the reader
+ * first: the realtor who owns the listing, or an admin reviewing it.
+ *
+ * `inline` plus the PDF content type asks the browser to render it rather than save it.
+ * That removes the download affordance, not the possibility: anything a browser can
+ * display, a determined reader can capture.
+ */
+export const getPropertyDocument = async (req: Request, res: Response): Promise<void> => {
+  const { id, docId } = documentIdSchema.parse(req.params);
+
+  const property = await Property.findById(id);
+
+  if (!property) throw new AppError("No listing with that id.", 404);
+
+  const user = req.user!;
+
+  if (user.role !== "admin" && !property.user.equals(user._id))
+    throw new AppError("This listing is not yours.", 403);
+
+  const doc = property.documents.find((d) => String(d._id) === docId);
+
+  if (!doc?.fileUrl) throw new AppError("That document is not on this listing.", 404);
+
+  const upstream = await fetch(doc.fileUrl);
+
+  if (!upstream.ok || !upstream.body)
+    throw new AppError("Could not fetch the document. Please try again.", 502);
+
+  // New documents are PDFs, but a listing may still carry a scan uploaded before that
+  // rule. Serve what is actually stored, from a two-entry allowlist: with `nosniff` below
+  // this is what stops anything else ever rendering inline on our own origin.
+  const upstreamType = upstream.headers.get("content-type") ?? "";
+  const type = upstreamType.startsWith("image/") ? upstreamType : "application/pdf";
+  const extension = type === "application/pdf" ? "pdf" : type.slice("image/".length);
+
+  res.setHeader("Content-Type", type);
+  // The filename only ever shows if a reader saves it anyway; name it after the document.
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${doc.name.replace(/"/g, "")}.${extension}"`,
+  );
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // A title document is private, so it must not sit in a shared or on-disk cache.
+  res.setHeader("Cache-Control", "private, no-store");
+
+  const length = upstream.headers.get("content-length");
+  if (length) res.setHeader("Content-Length", length);
+
+  await pipeline(Readable.fromWeb(upstream.body as ReadableStream), res);
 };

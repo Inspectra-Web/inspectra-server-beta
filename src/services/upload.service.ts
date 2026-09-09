@@ -38,7 +38,7 @@ export const avatarUpload = multer({
   },
 });
 
-/** One buffer to Cloudinary. `auto` lets a PDF through as a raw file. */
+/** One buffer to Cloudinary. Cloudinary files a PDF under `image`, like the photos. */
 const send = (
   buffer: Buffer,
   folder: string,
@@ -84,19 +84,24 @@ export const photoUpload = multer({
   },
 });
 
-// A title document is scanned or photographed, so both are allowed.
+// PDF only. A scan has to be saved as one, which is what lets a single viewer serve every
+// document and keeps the file out of an <img> a browser would offer to save.
 export const documentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: DOCUMENT_MAX_MB * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("image/") || file.mimetype === "application/pdf") {
+    if (file.mimetype === "application/pdf") {
       cb(null, true);
       return;
     }
 
-    cb(new AppError("Upload a PDF or an image of the document.", 400));
+    cb(new AppError("Upload the document as a PDF.", 400));
   },
 });
+
+/** The mimetype is whatever the client claimed. These five bytes are not. */
+export const isPdf = (buffer: Buffer): boolean =>
+  buffer.subarray(0, 5).toString("latin1") === "%PDF-";
 
 // Fitted inside the box rather than cropped: a listing photo composed by the
 // realtor should not lose its edges the way a square headshot can afford to.
@@ -110,7 +115,7 @@ export const uploadPhoto = async (buffer: Buffer): Promise<UploadedImage> => {
   return send(image, PHOTO_FOLDER, "image");
 };
 
-// Sent as-is: a PDF has no pixels to resize, and re-encoding a scan loses detail
+// Sent as-is: a PDF has no pixels to resize, and re-encoding a scan would lose detail
 // the reviewer needs to read a survey plan.
 export const uploadDocument = async (buffer: Buffer): Promise<UploadedFile> =>
   send(buffer, DOCUMENT_FOLDER, "auto");

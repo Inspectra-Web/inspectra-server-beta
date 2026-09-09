@@ -154,14 +154,19 @@ export const createPropertySchema = propertyObject
 export type CreatePropertyInput = z.infer<typeof createPropertySchema>;
 
 /**
- * `images` and `documents` are keep-lists, not uploads: the URLs still wanted.
- * Anything stored and missing from the list is deleted, which is how the composer
- * removes a photo it no longer wants. New files arrive on their own endpoints.
+ * `images` and `documents` are keep-lists, not uploads: what the composer still wants.
+ * Anything stored and missing from the list is deleted, which is how it removes a photo.
+ * New files arrive on their own endpoints.
+ *
+ * Photos are kept by URL because a photo's URL is public anyway; documents are kept by
+ * their subdocument id, because their URL is never handed to the client.
  */
 export const updatePropertySchema = propertyObject
   .extend({
     images: z.array(line).max(IMAGES_MAX, `Keep at most ${IMAGES_MAX} photos`),
-    documents: z.array(line).max(DOCUMENTS_MAX, `Keep at most ${DOCUMENTS_MAX} documents`),
+    documents: z
+      .array(line.regex(/^[0-9a-f]{24}$/i, "That is not a valid document id"))
+      .max(DOCUMENTS_MAX, `Keep at most ${DOCUMENTS_MAX} documents`),
   })
   .partial()
   .superRefine((body, ctx) => {
@@ -234,3 +239,9 @@ export const propertyIdSchema = z.object({
 });
 
 export type PropertyIdParams = z.infer<typeof propertyIdSchema>;
+
+/** The listing plus one of its documents, for the stream-the-file route. */
+export const documentIdSchema = z.object({
+  id: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid listing id"),
+  docId: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid document id"),
+});

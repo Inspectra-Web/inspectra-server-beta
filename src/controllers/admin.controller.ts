@@ -17,6 +17,7 @@ import {
   listingIdSchema,
   listUsersSchema,
   userIdSchema,
+  type ReviewListingInput,
   type UserStatusInput,
 } from "../validators/admin.validator.js";
 import type { LoginInput } from "../validators/auth.validator.js";
@@ -332,6 +333,8 @@ interface ListingRow {
   city: string;
   fullAddress: string;
   image: string;
+  docs: number;
+  docsVerified: number;
   realtorId?: Types.ObjectId;
   realtorName: string;
   createdAt: Date;
@@ -340,6 +343,7 @@ interface ListingRow {
 interface ListingPage {
   rows: ListingRow[];
   total: { count: number }[];
+  counts: { _id: VerificationStatus; count: number }[];
   cities: { _id: string }[];
 }
 
@@ -353,18 +357,17 @@ const listingRow = (row: ListingRow) => ({
   city: row.city,
   fullAddress: row.fullAddress,
   image: row.image,
+  docs: row.docs,
+  docsVerified: row.docsVerified,
   realtorId: row.realtorId,
   realtorName: row.realtorName,
   createdAt: row.createdAt,
 });
 
 export const listListings = async (req: Request, res: Response): Promise<void> => {
-  const { q, status, city, page, limit } = listListingsSchema.parse(req.query);
+  const { q, status, city, sort, page, limit } = listListingsSchema.parse(req.query);
 
-  // Status filters before the lookup, so the join runs over the matched set.
   const pipeline: PipelineStage[] = [];
-
-  if (status !== "all") pipeline.push({ $match: { "verification.status": status } });
 
   pipeline.push(
     {
@@ -377,6 +380,16 @@ export const listListings = async (req: Request, res: Response): Promise<void> =
         city: { $ifNull: ["$address.city", ""] },
         fullAddress: { $ifNull: ["$address.fullAddress", ""] },
         image: { $ifNull: [{ $first: "$images.url" }, ""] },
+        // The queue's core signal: how much of the dossier is already cleared.
+        docs: { $size: { $ifNull: ["$documents", []] } },
+        docsVerified: {
+          $size: {
+            $filter: {
+              input: { $ifNull: ["$documents", []] },
+              cond: { $eq: ["$$this.status", "verified"] },
+            },
+          },
+        },
         realtorId: "$realtor._id",
         realtorName: { $ifNull: ["$realtor.fullname", ""] },
       },
@@ -399,16 +412,29 @@ export const listListings = async (req: Request, res: Response): Promise<void> =
     });
   }
 
-  // Repeated in both branches so the city list is not narrowed by the city already
-  // chosen, which would empty the dropdown after one pick.
+  // Repeated in the branches that need it so the city list is not narrowed by the city
+  // already chosen, which would empty the dropdown after one pick.
   const cityMatch: PipelineStage.FacetPipelineStage[] =
     city === "all" ? [] : [{ $match: { city } }];
+
+  // The status clause lives in the branches too, and deliberately not at the head of the
+  // pipeline: the counts strip is computed without it, so choosing one segment cannot
+  // zero the other three. The cost is running the lookup over the wider set.
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all"
+      ? []
+      : status === "open"
+        ? [{ $match: { status: { $in: ["pending", "disputed"] } } }]
+        : [{ $match: { status } }];
+
+  const order = sort === "oldest" ? 1 : -1;
 
   pipeline.push({
     $facet: {
       rows: [
         ...cityMatch,
-        { $sort: { createdAt: -1, _id: -1 } },
+        ...statusMatch,
+        { $sort: { createdAt: order, _id: order } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
         {
@@ -421,13 +447,16 @@ export const listListings = async (req: Request, res: Response): Promise<void> =
             city: 1,
             fullAddress: 1,
             image: 1,
+            docs: 1,
+            docsVerified: 1,
             realtorId: 1,
             realtorName: 1,
             createdAt: 1,
           },
         },
       ],
-      total: [...cityMatch, { $count: "count" }],
+      total: [...cityMatch, ...statusMatch, { $count: "count" }],
+      counts: [...cityMatch, { $group: { _id: "$status", count: { $sum: 1 } } }],
       cities: [
         { $match: { city: { $ne: "" } } },
         { $group: { _id: "$city" } },
@@ -441,10 +470,18 @@ export const listListings = async (req: Request, res: Response): Promise<void> =
   const rows = result?.rows ?? [];
   const total = result?.total[0]?.count ?? 0;
 
+  const counts = { all: 0, verified: 0, pending: 0, disputed: 0 };
+
+  for (const row of result?.counts ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
   res.status(200).json({
     status: "success",
     data: {
       listings: rows.map(listingRow),
+      counts,
       cities: (result?.cities ?? []).map((c) => c._id),
       page,
       limit,
@@ -489,5 +526,61 @@ export const getListing = async (req: Request, res: Response): Promise<void> => 
         identityVerified: identity?.verified ?? false,
       },
     },
+  });
+};
+
+/**
+ * One review, applied whole: the document decisions and the listing's verdict land in a
+ * single write, because a document verdict only means anything alongside the listing's.
+ * A listing can only carry the badge when every document behind it does, which is what
+ * stops per-document review from being decoration.
+ */
+export const reviewListing = async (req: Request, res: Response): Promise<void> => {
+  const { id } = listingIdSchema.parse(req.params);
+  const { status, note, documents }: ReviewListingInput = req.body;
+
+  const property = await Property.findById(id);
+
+  if (!property) throw new AppError("No listing with that id.", 404);
+
+  for (const decision of documents) {
+    const doc = property.documents.find((d) => String(d._id) === decision.id);
+
+    if (!doc) throw new AppError("That document is not on this listing.", 422);
+
+    doc.status = decision.status;
+    // The reason answers a flag, so it goes when the flag does.
+    doc.reason = decision.status === "flagged" ? decision.reason : "";
+  }
+
+  if (status === "verified") {
+    if (property.documents.length === 0)
+      throw new AppError("A listing cannot be verified with no documents attached.", 422);
+
+    if (property.documents.some((doc) => doc.status !== "verified"))
+      throw new AppError("Every document has to be verified before the listing can be.", 422);
+  }
+
+  property.verification.status = status;
+  property.verification.note = note;
+
+  if (!property.isModified()) throw new AppError("Nothing changed in this review.", 409);
+
+  property.verification.reviewedAt = new Date();
+  property.verification.reviewedBy = req.user!._id;
+
+  await property.save({ validateModifiedOnly: true });
+
+  const message =
+    status === "verified"
+      ? "Listing verified. The badge is live."
+      : status === "disputed"
+        ? "Listing disputed and pulled from search."
+        : "Listing sent back for review.";
+
+  res.status(200).json({
+    status: "success",
+    message,
+    data: { property: detailedProperty(property) },
   });
 };

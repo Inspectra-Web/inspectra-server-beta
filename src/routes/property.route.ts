@@ -6,6 +6,7 @@ import {
   createProperty,
   deleteMyProperty,
   getMyProperty,
+  getPropertyDocument,
   listMyProperties,
   updateMyProperty,
 } from "../controllers/property.controller.js";
@@ -20,7 +21,14 @@ import {
 
 const router = Router();
 
-router.use(protect, restrictTo("realtor"));
+router.use(protect);
+
+// The one route on this router an admin may reach: the review console has to read the
+// documents it is judging, and the handler checks owner-or-admin itself. Declared before
+// the realtor gate below so that gate does not shut an admin out of it.
+router.get("/:id/documents/:docId/file", getPropertyDocument);
+
+router.use(restrictTo("realtor"));
 
 // Declared before "/:id", and kept off "/" so the public browse can take that later.
 router.get("/me", listMyProperties);
