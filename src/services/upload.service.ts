@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import multer from "multer";
 import sharp from "sharp";
 
@@ -103,12 +104,106 @@ export const documentUpload = multer({
 export const isPdf = (buffer: Buffer): boolean =>
   buffer.subarray(0, 5).toString("latin1") === "%PDF-";
 
+/**
+ * The brand mark burned into every listing photo.
+ *
+ * Burned in at upload, not applied as a Cloudinary delivery transformation, because a
+ * transformation leaves a clean original on the CDN that anyone can reach by editing the
+ * URL, which is exactly the person the mark exists to stop. There is no unmarked copy.
+ *
+ * It does not prevent a photo being saved, and is not meant to: a listing photo's job is
+ * to travel. It makes a stolen one advertise INSPECTRA wherever it is reposted.
+ */
+const MARK_RATIO = 0.16;
+const MARK_MIN = 90;
+const MARK_PAD_RATIO = 0.025;
+const MARK_OPACITY = 0.72;
+const MARK_SHADOW_OPACITY = 0.35;
+const MARK_SHADOW_OFFSET = 2;
+
+// Resolved from this module rather than the working directory, so it survives both `tsx`
+// on src/ and `node` on dist/: both sit two levels under the package root.
+const MARK_FILE = fileURLToPath(new URL("../../assets/watermark.png", import.meta.url));
+
+interface Mark {
+  data: Buffer;
+  width: number;
+  height: number;
+}
+
+/** Multiplies an image's alpha, which is how sharp expresses opacity. */
+const fade = (image: Buffer, alpha: number): Promise<Buffer> =>
+  sharp(image)
+    .composite([
+      {
+        input: Buffer.from([255, 255, 255, Math.round(255 * alpha)]),
+        raw: { width: 1, height: 1, channels: 4 },
+        tile: true,
+        blend: "dest-in",
+      },
+    ])
+    .png()
+    .toBuffer();
+
+const buildMark = async (width: number): Promise<Mark> => {
+  const logo = await sharp(MARK_FILE).resize({ width }).png().toBuffer();
+
+  // The mark is white, so `negate` on the colour channels alone gives its exact silhouette
+  // in black. Sitting a couple of pixels behind, it keeps the mark legible on a pale wall.
+  const shadow = await fade(
+    await sharp(logo).negate({ alpha: false }).png().toBuffer(),
+    MARK_SHADOW_OPACITY,
+  );
+
+  const { width: w = width, height: h = 0 } = await sharp(logo).metadata();
+
+  const data = await sharp({
+    create: { width: w + MARK_SHADOW_OFFSET, height: h + MARK_SHADOW_OFFSET, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite([
+      { input: shadow, top: MARK_SHADOW_OFFSET, left: MARK_SHADOW_OFFSET },
+      { input: await fade(logo, MARK_OPACITY), top: 0, left: 0 },
+    ])
+    .png()
+    .toBuffer();
+
+  return { data, width: w + MARK_SHADOW_OFFSET, height: h + MARK_SHADOW_OFFSET };
+};
+
+// Built once per output width, and nearly every photo lands on the same one.
+const marks = new Map<number, Mark>();
+
+const markFor = async (width: number): Promise<Mark> => {
+  const cached = marks.get(width);
+  if (cached) return cached;
+
+  const mark = await buildMark(width);
+  marks.set(width, mark);
+
+  return mark;
+};
+
 // Fitted inside the box rather than cropped: a listing photo composed by the
 // realtor should not lose its edges the way a square headshot can afford to.
 export const uploadPhoto = async (buffer: Buffer): Promise<UploadedImage> => {
-  const image = await sharp(buffer)
+  // Resized first, so the mark can be sized against what the photo actually became:
+  // `withoutEnlargement` means a small upload keeps its own dimensions.
+  const { data, info } = await sharp(buffer)
     .rotate()
     .resize(PHOTO_WIDTH, PHOTO_HEIGHT, { fit: "inside", withoutEnlargement: true })
+    .toBuffer({ resolveWithObject: true });
+
+  const mark = await markFor(Math.max(MARK_MIN, Math.round(info.width * MARK_RATIO)));
+  const pad = Math.round(info.width * MARK_PAD_RATIO);
+
+  const image = await sharp(data)
+    .composite([
+      {
+        input: mark.data,
+        top: Math.max(0, info.height - mark.height - pad),
+        left: Math.max(0, info.width - mark.width - pad),
+      },
+    ])
     .jpeg({ quality: 82 })
     .toBuffer();
 
