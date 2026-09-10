@@ -18,6 +18,11 @@ import Property, {
 } from "../models/property.model.js";
 import User from "../models/user.model.js";
 import {
+  sendListingSubmitted,
+  sendListingUpdated,
+  type ListingBrief,
+} from "../services/email.service.js";
+import {
   destroyAsset,
   isPdf,
   uploadDocument,
@@ -144,6 +149,16 @@ const sendBackForReview = (property: PropertyDoc): boolean => {
 
   return true;
 };
+
+/** What the admin's notification says about a listing. */
+const listingBrief = (property: PropertyDoc, realtor: string): ListingBrief => ({
+  id: String(property._id),
+  ref: property.ref,
+  title: property.title,
+  city: property.address.city,
+  state: property.address.state,
+  realtor,
+});
 
 /* ------------------------------------------------------------------ *
  * The public marketplace. The only two handlers here that answer to nobody
@@ -406,6 +421,8 @@ export const createProperty = async (req: Request, res: Response): Promise<void>
 
   const property = await Property.create({ ...body, user: req.user!._id });
 
+  sendListingSubmitted(listingBrief(property, req.user!.fullname));
+
   res.status(201).json({
     status: "success",
     message: "Listing created. It is now waiting on verification.",
@@ -499,9 +516,15 @@ export const updateMyProperty = async (req: Request, res: Response): Promise<voi
       422,
     );
 
-  const recheck = property.isModified() && sendBackForReview(property);
+  // Read before sendBackForReview, which modifies the document itself. A listing
+  // already pending is still an edit the admin should hear about; it just does not
+  // pull a badge on the way.
+  const changed = property.isModified();
+  const recheck = changed && sendBackForReview(property);
 
   await property.save();
+
+  if (changed) sendListingUpdated(listingBrief(property, req.user!.fullname), recheck);
 
   // Only once the listing no longer points at them: a failed delete must not
   // leave the page showing a file that is already gone.
@@ -541,6 +564,10 @@ export const addPropertyPhotos = async (req: Request, res: Response): Promise<vo
   const recheck = sendBackForReview(property);
 
   await property.save();
+
+  // Only on a demotion, unlike an edit. Every listing is composed as a save and then
+  // its uploads, so mailing each one would mean three emails for one new listing.
+  if (recheck) sendListingUpdated(listingBrief(property, req.user!.fullname), true);
 
   const added = `${uploaded.length} photo${uploaded.length === 1 ? "" : "s"} added.`;
 
@@ -582,6 +609,9 @@ export const addPropertyDocument = async (req: Request, res: Response): Promise<
   const recheck = sendBackForReview(property);
 
   await property.save();
+
+  // As with photos: the composer's own upload on a new listing is not news.
+  if (recheck) sendListingUpdated(listingBrief(property, req.user!.fullname), true);
 
   res.status(201).json({
     status: "success",

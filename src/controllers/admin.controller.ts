@@ -10,6 +10,7 @@ import Property, {
   type VerificationStatus,
 } from "../models/property.model.js";
 import User, { publicUser, type IUser } from "../models/user.model.js";
+import { sendListingReviewed } from "../services/email.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
 import {
   listListingsSchema,
@@ -570,6 +571,28 @@ export const reviewListing = async (req: Request, res: Response): Promise<void> 
   property.verification.reviewedBy = req.user!._id;
 
   await property.save({ validateModifiedOnly: true });
+
+  // The realtor learns the verdict here rather than by revisiting the console. The
+  // flags travel with it: the outcome alone does not tell them what to fix.
+  const owner = await User.findById(property.user).select("email fullname");
+
+  if (owner)
+    sendListingReviewed(
+      owner.email,
+      {
+        id: String(property._id),
+        ref: property.ref,
+        title: property.title,
+        city: property.address.city,
+        state: property.address.state,
+        realtor: owner.fullname,
+      },
+      status,
+      note,
+      property.documents
+        .filter((doc) => doc.status === "flagged")
+        .map((doc) => ({ name: doc.name, reason: doc.reason })),
+    );
 
   const message =
     status === "verified"
