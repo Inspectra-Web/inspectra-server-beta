@@ -216,6 +216,13 @@ const CATEGORY_FILTERS: (PropertyCategory | "all")[] = ["all", ...PROPERTY_CATEG
 export const listPropertiesSchema = z.object({
   q: line.max(SEARCH_MAX, "Search is too long").default(""),
   city: line.max(CITY_MAX, "City is too long").default("all"),
+  /**
+   * Whose listings, for a realtor's public profile. Read by `listProperties` alone:
+   * `buildFilter` deliberately ignores it, because that helper is also what builds a
+   * realtor's own list from a `{ user }` base, and a clause here would overwrite that
+   * base and hand one realtor another realtor's listings through `/properties/me`.
+   */
+  realtor: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid realtor id").optional(),
   status: z.enum(STATUS_FILTERS).default("all"),
   listingStatus: z.enum(LISTING_FILTERS).default("all"),
   type: z.enum(TYPE_FILTERS).default("all"),

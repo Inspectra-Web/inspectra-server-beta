@@ -3,7 +3,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
 
 import type { Request, Response } from "express";
-import { trusted, type PipelineStage, type QueryFilter, type Types } from "mongoose";
+import { Types, trusted, type PipelineStage, type QueryFilter } from "mongoose";
 
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
@@ -229,12 +229,16 @@ const marketplaceRow = (row: MarketplaceRow) => ({
 
 export const listProperties = async (req: Request, res: Response): Promise<void> => {
   const query = listPropertiesSchema.parse(req.query);
-  const { city, type, status, sort, page, limit } = query;
+  const { city, type, status, realtor, sort, page, limit } = query;
+
+  // Applied here rather than inside buildFilter: that helper also builds a realtor's
+  // own list from a { user } base, and a clause there would overwrite it.
+  const owner = realtor ? { user: new Types.ObjectId(realtor) } : {};
 
   // City and type are neutralised here and applied in the facet branches instead:
   // a dropdown narrowed by its own pick empties itself after one choice.
   const pipeline: PipelineStage[] = [
-    { $match: buildFilter({ ...query, city: "all", type: "all" }, {}) },
+    { $match: { ...buildFilter({ ...query, city: "all", type: "all" }, {}), ...owner } },
     ...publicStages,
     {
       $addFields: {
