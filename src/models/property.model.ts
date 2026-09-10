@@ -8,6 +8,7 @@ import {
 } from "../types/property.type.js";
 
 const TITLE_MAX = 140;
+const SLUG_MAX = 80;
 const DESCRIPTION_MAX = 1200;
 const TERMS_MAX = 300;
 const IMAGES_MAX = 20;
@@ -133,6 +134,7 @@ export interface AdditionalFee {
 export interface IProperty {
   user: Types.ObjectId;
   ref: string;
+  slug: string;
 
   title: string;
   description: string;
@@ -217,6 +219,8 @@ const propertySchema = new Schema<IProperty>(
     // Human-readable and searchable. Stamped from the id, so it is unique by
     // construction and never needs a retry on collision.
     ref: { type: String, trim: true, uppercase: true, unique: true },
+    // The public URL for the listing. Stamped the same way, for the same reason.
+    slug: { type: String, trim: true, lowercase: true, unique: true },
 
     title: {
       ...required("A title"),
@@ -379,12 +383,35 @@ export type PropertyDoc = HydratedDocument<IProperty>;
 propertySchema.index({ "verification.status": 1, listingStatus: 1, createdAt: -1 });
 propertySchema.index({ user: 1, createdAt: -1 });
 
+/**
+ * The listing's public URL. The title carries it, so the link says what it points at,
+ * but the last 8 hex of the id is appended for the same reason `ref` uses it: unique
+ * by construction, with no retry loop and no race. Titles are nowhere near unique in
+ * this market, and two realtors both posting "3 Bedroom Apartment In Lekki" must not
+ * mean the second one cannot be saved at all.
+ */
+export const buildSlug = (title: string, id: string): string => {
+  const base = title
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, SLUG_MAX)
+    .replace(/^-+|-+$/g, "");
+
+  const suffix = id.slice(-8);
+
+  return base ? `${base}-${suffix}` : suffix;
+};
+
 // Mongoose 9 passes no `next`: return to continue, throw to abort. `this` is
 // annotated because the validate hook does not infer the document type.
 propertySchema.pre("validate", function (this: PropertyDoc) {
-  if (this.ref) return;
+  if (!this.ref) this.ref = `INS-${String(this._id).slice(-8).toUpperCase()}`;
 
-  this.ref = `INS-${String(this._id).slice(-8).toUpperCase()}`;
+  // Stamped once and never re-derived. A slug that moved with the title would break
+  // every link already shared, and a listing's link outlives its wording.
+  if (!this.slug && this.title) this.slug = buildSlug(this.title, String(this._id));
 });
 
 /**
@@ -399,6 +426,7 @@ propertySchema.pre("validate", function (this: PropertyDoc) {
 export const detailedProperty = (property: PropertyDoc) => ({
   id: property._id,
   ref: property.ref,
+  slug: property.slug,
   title: property.title,
   description: property.description,
   price: property.price,
@@ -446,6 +474,7 @@ export const detailedProperty = (property: PropertyDoc) => ({
 export const publicProperty = (property: PropertyDoc) => ({
   id: property._id,
   ref: property.ref,
+  slug: property.slug,
   realtor: property.user,
   title: property.title,
   description: property.description,

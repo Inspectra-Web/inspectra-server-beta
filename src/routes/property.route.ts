@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 
 import {
   addPropertyDocument,
@@ -6,8 +6,10 @@ import {
   createProperty,
   deleteMyProperty,
   getMyProperty,
+  getProperty,
   getPropertyDocument,
   listMyProperties,
+  listProperties,
   updateMyProperty,
 } from "../controllers/property.controller.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
@@ -20,6 +22,20 @@ import {
 } from "../validators/property.validator.js";
 
 const router = Router();
+
+/**
+ * "/me" is the realtor's own list, declared below the session gate. Express matches
+ * in declaration order, so the public detail route above it has to let that path
+ * through rather than treating "me" as a slug and 404ing on it. It is a valid slug
+ * shape, so the guard cannot be left to the param regex.
+ */
+const notMe: RequestHandler = (req, _res, next) =>
+  next(req.params.slug === "me" ? "route" : undefined);
+
+// Public: the marketplace browse and one listing, no auth. Above the gate below.
+// A listing is addressed by its slug here; the realtor and admin routes use the id.
+router.get("/", listProperties);
+router.get("/:slug", notMe, getProperty);
 
 router.use(protect);
 

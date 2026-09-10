@@ -35,6 +35,8 @@ const YEAR_MAX = 2100;
 
 const SEARCH_MAX = 100;
 const CITY_MAX = 80;
+// The model slices the title to 80, then appends a hyphen and 8 hex.
+const SLUG_MAX = 89;
 const BEDS_MAX = 20;
 const PAGE_SIZE = 12;
 const PAGE_SIZE_MAX = 48;
@@ -239,6 +241,20 @@ export const propertyIdSchema = z.object({
 });
 
 export type PropertyIdParams = z.infer<typeof propertyIdSchema>;
+
+/**
+ * The public handle. Lowercase words joined by single hyphens, which is exactly what
+ * `buildSlug` stamps, so anything else was never a link we issued.
+ */
+export const propertySlugSchema = z.object({
+  slug: z
+    .string()
+    .trim()
+    .max(SLUG_MAX, "That is not a valid listing link")
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "That is not a valid listing link"),
+});
+
+export type PropertySlugParams = z.infer<typeof propertySlugSchema>;
 
 /** The listing plus one of its documents, for the stream-the-file route. */
 export const documentIdSchema = z.object({

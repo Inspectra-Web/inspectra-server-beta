@@ -3,26 +3,33 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
 
 import type { Request, Response } from "express";
-import { trusted, type QueryFilter, type Types } from "mongoose";
+import { trusted, type PipelineStage, type QueryFilter, type Types } from "mongoose";
 
 import AppError from "../error/app.error.js";
+import Identity from "../models/identity.model.js";
+import Profile from "../models/profile.model.js";
 import Property, {
   detailedProperty,
+  publicProperty,
   type IProperty,
+  type ListingStatus,
   type PropertyDoc,
   type VerificationStatus,
 } from "../models/property.model.js";
+import User from "../models/user.model.js";
 import {
   destroyAsset,
   isPdf,
   uploadDocument,
   uploadPhoto,
 } from "../services/upload.service.js";
+import type { PropertyType } from "../types/property.type.js";
 import {
   addDocumentSchema,
   listPropertiesSchema,
   documentIdSchema,
   propertyIdSchema,
+  propertySlugSchema,
   typeFitsCategory,
   type AddDocumentInput,
   type CreatePropertyInput,
@@ -136,6 +143,258 @@ const sendBackForReview = (property: PropertyDoc): boolean => {
   property.verification.reviewedBy = undefined;
 
   return true;
+};
+
+/* ------------------------------------------------------------------ *
+ * The public marketplace. The only two handlers here that answer to nobody
+ * signed in, which is why they are declared above the router's protect gate.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Who the public may see. A suspended realtor's listings come off the site with
+ * them, and a listing whose account is gone drops out on the unwind. Shared by
+ * the browse and by a single listing, so one hidden from the grid cannot be
+ * reached by typing its URL: the failure vettedStages exists to prevent.
+ *
+ * Verification status is deliberately not a gate. A pending or disputed listing
+ * stays public and says so, which is the whole point of the segmented control.
+ */
+const publicStages: PipelineStage[] = [
+  { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
+  { $unwind: "$realtor" },
+  { $match: { "realtor.status": "active" } },
+  // Profiles are created lazily, so an older realtor may not own one yet.
+  { $lookup: { from: "profiles", localField: "user", foreignField: "user", as: "profile" } },
+  { $unwind: { path: "$profile", preserveNullAndEmptyArrays: true } },
+];
+
+/** A browse card: the listing, flattened, plus the named person behind it. */
+interface MarketplaceRow {
+  _id: Types.ObjectId;
+  ref: string;
+  slug: string;
+  title: string;
+  price: number;
+  type: PropertyType;
+  listingStatus: ListingStatus;
+  status: VerificationStatus;
+  city: string;
+  fullAddress: string;
+  image: string;
+  beds: number;
+  baths: number;
+  floorArea: number;
+  landSize: number;
+  hasVideo: boolean;
+  realtorId: Types.ObjectId;
+  realtorName: string;
+  realtorAvatar: string;
+  certified: boolean;
+  createdAt: Date;
+}
+
+interface MarketplacePage {
+  rows: MarketplaceRow[];
+  total: { count: number }[];
+  counts: { _id: VerificationStatus; count: number }[];
+  cities: { _id: string }[];
+  types: { _id: PropertyType }[];
+}
+
+const marketplaceRow = (row: MarketplaceRow) => ({
+  id: row._id,
+  ref: row.ref,
+  slug: row.slug,
+  title: row.title,
+  price: row.price,
+  type: row.type,
+  listingStatus: row.listingStatus,
+  status: row.status,
+  city: row.city,
+  fullAddress: row.fullAddress,
+  image: row.image,
+  beds: row.beds,
+  baths: row.baths,
+  floorArea: row.floorArea,
+  landSize: row.landSize,
+  hasVideo: row.hasVideo,
+  realtor: {
+    id: row.realtorId,
+    fullname: row.realtorName,
+    avatar: row.realtorAvatar,
+    certified: row.certified,
+  },
+  createdAt: row.createdAt,
+});
+
+export const listProperties = async (req: Request, res: Response): Promise<void> => {
+  const query = listPropertiesSchema.parse(req.query);
+  const { city, type, status, sort, page, limit } = query;
+
+  // City and type are neutralised here and applied in the facet branches instead:
+  // a dropdown narrowed by its own pick empties itself after one choice.
+  const pipeline: PipelineStage[] = [
+    { $match: buildFilter({ ...query, city: "all", type: "all" }, {}) },
+    ...publicStages,
+    {
+      $addFields: {
+        status: "$verification.status",
+        city: { $ifNull: ["$address.city", ""] },
+        fullAddress: { $ifNull: ["$address.fullAddress", ""] },
+        image: { $ifNull: [{ $first: "$images.url" }, ""] },
+        beds: { $ifNull: ["$features.bedrooms", 0] },
+        baths: { $ifNull: ["$features.bathrooms", 0] },
+        floorArea: { $ifNull: ["$features.floorArea", 0] },
+        landSize: { $ifNull: ["$features.landSize", 0] },
+        // Either an external tour or an uploaded clip counts as a video.
+        hasVideo: {
+          $gt: [
+            {
+              $strLenCP: {
+                $concat: [
+                  { $ifNull: ["$videoUrl", ""] },
+                  { $ifNull: ["$video.url", ""] },
+                ],
+              },
+            },
+            0,
+          ],
+        },
+        realtorId: "$realtor._id",
+        realtorName: { $ifNull: ["$realtor.fullname", ""] },
+        realtorAvatar: { $ifNull: ["$realtor.avatar", ""] },
+        certified: { $ifNull: ["$profile.certified", false] },
+      },
+    },
+  ];
+
+  const cityMatch: PipelineStage.FacetPipelineStage[] =
+    city === "all" ? [] : [{ $match: { city } }];
+
+  const typeMatch: PipelineStage.FacetPipelineStage[] =
+    type === "all" ? [] : [{ $match: { type } }];
+
+  // The status clause lives in the branches that page, and deliberately not in
+  // counts: choosing one segment cannot be allowed to zero the other three.
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all" ? [] : [{ $match: { status } }];
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...cityMatch,
+        ...typeMatch,
+        ...statusMatch,
+        { $sort: SORTS[sort] },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        {
+          $project: {
+            ref: 1,
+            slug: 1,
+            title: 1,
+            price: 1,
+            type: 1,
+            listingStatus: 1,
+            status: 1,
+            city: 1,
+            fullAddress: 1,
+            image: 1,
+            beds: 1,
+            baths: 1,
+            floorArea: 1,
+            landSize: 1,
+            hasVideo: 1,
+            realtorId: 1,
+            realtorName: 1,
+            realtorAvatar: 1,
+            certified: 1,
+            createdAt: 1,
+          },
+        },
+      ],
+      total: [...cityMatch, ...typeMatch, ...statusMatch, { $count: "count" }],
+      counts: [
+        ...cityMatch,
+        ...typeMatch,
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ],
+      // Neither branch takes any of the three: a filter must never narrow the
+      // list of options it was itself chosen from.
+      cities: [
+        { $match: { city: { $ne: "" } } },
+        { $group: { _id: "$city" } },
+        { $sort: { _id: 1 } },
+      ],
+      types: [{ $group: { _id: "$type" } }, { $sort: { _id: 1 } }],
+    },
+  });
+
+  const [result] = await Property.aggregate<MarketplacePage>(pipeline);
+
+  const rows = result?.rows ?? [];
+  const total = result?.total[0]?.count ?? 0;
+
+  const counts = { all: 0, verified: 0, pending: 0, disputed: 0 };
+
+  for (const row of result?.counts ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      listings: rows.map(marketplaceRow),
+      counts,
+      cities: (result?.cities ?? []).map((c) => c._id),
+      types: (result?.types ?? []).map((t) => t._id),
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+export const getProperty = async (req: Request, res: Response): Promise<void> => {
+  const { slug } = propertySlugSchema.parse(req.params);
+
+  const property = await Property.findOne({ slug });
+
+  if (!property) throw new AppError("No listing with that link.", 404);
+
+  const [owner, profile, identity] = await Promise.all([
+    User.findById(property.user),
+    Profile.findOne({ user: property.user }),
+    Identity.findOne({ user: property.user }),
+  ]);
+
+  // The same gate publicStages applies to the browse, and a 404 rather than the
+  // 403 findOwned gives a realtor: what is hidden here is the account, not the
+  // verification status, and a hidden account is not confirmed to exist.
+  if (!owner || owner.status !== "active")
+    throw new AppError("No listing with that link.", 404);
+
+  // The only writer of views in the app: nothing else reads a listing publicly.
+  await Property.updateOne({ _id: property._id }, { $inc: { views: 1 } });
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      listing: publicProperty(property),
+      // No email, phone or account status: the marketplace is not the console.
+      realtor: {
+        id: owner._id,
+        fullname: owner.fullname,
+        avatar: owner.avatar,
+        agencyName: profile?.agencyName ?? "",
+        city: profile?.city ?? "",
+        certified: profile?.certified ?? false,
+        identityVerified: identity?.verified ?? false,
+      },
+    },
+  });
 };
 
 export const createProperty = async (req: Request, res: Response): Promise<void> => {
