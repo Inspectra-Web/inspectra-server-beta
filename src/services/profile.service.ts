@@ -1,3 +1,4 @@
+import type { IdentityDoc } from "../models/identity.model.js";
 import Profile, { type ProfileDoc } from "../models/profile.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
 
@@ -49,4 +50,40 @@ export const ensureProfile = async (user: UserDoc): Promise<ProfileDoc> => {
   user.profile = profile._id;
 
   return profile;
+};
+
+/** Whether a realtor may put a property on the platform, and what is stopping them. */
+export interface ListingEligibility {
+  ready: boolean;
+  missing: string[];
+}
+
+/**
+ * The two gates on listing: a profile that has actually been filled in, and an
+ * identity check that passed.
+ *
+ * The profile fields are not an arbitrary set. Each is something a buyer reads on the
+ * listing or needs in order to reach the person behind it, which is the whole point:
+ * a verified property hanging off a blank profile is half a promise kept. jobTitle is
+ * deliberately out, because the UI already falls back to "Realtor", and so is
+ * agencyName, because an independent realtor has no agency to name.
+ *
+ * Pure, and given everything it reads. The composer's gate and the profile endpoint
+ * that renders it both call this, and a rule enforced in one place and described in
+ * another is a rule that drifts.
+ */
+export const listingEligibility = (
+  user: UserDoc,
+  profile: ProfileDoc,
+  identity: IdentityDoc | null,
+): ListingEligibility => {
+  const missing: string[] = [];
+
+  if (!user.phone?.trim()) missing.push("a phone number");
+  if (!profile.city.trim()) missing.push("your city");
+  if (!profile.state.trim()) missing.push("your state");
+  if (!profile.bio.trim()) missing.push("a short bio");
+  if (!identity?.verified) missing.push("a verified identity");
+
+  return { ready: missing.length === 0, missing };
 };

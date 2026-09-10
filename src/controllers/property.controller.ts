@@ -22,6 +22,7 @@ import {
   sendListingUpdated,
   type ListingBrief,
 } from "../services/email.service.js";
+import { ensureProfile, listingEligibility } from "../services/profile.service.js";
 import {
   destroyAsset,
   isPdf,
@@ -418,10 +419,30 @@ export const getProperty = async (req: Request, res: Response): Promise<void> =>
 
 export const createProperty = async (req: Request, res: Response): Promise<void> => {
   const body: CreatePropertyInput = req.body;
+  const user = req.user!;
 
-  const property = await Property.create({ ...body, user: req.user!._id });
+  // A listing carries its realtor to the buyer, so the person has to exist properly
+  // before the property can. Checked here rather than on the photo and document
+  // routes too: those need a listing that already cleared this.
+  const [profile, identity] = await Promise.all([
+    ensureProfile(user),
+    Identity.findOne({ user: user._id }),
+  ]);
 
-  sendListingSubmitted(listingBrief(property, req.user!.fullname));
+  const { ready, missing } = listingEligibility(user, profile, identity);
+
+  if (!ready) {
+    const needs =
+      missing.length > 1
+        ? `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`
+        : missing[0];
+
+    throw new AppError(`You need ${needs} before you can list a property.`, 403);
+  }
+
+  const property = await Property.create({ ...body, user: user._id });
+
+  sendListingSubmitted(listingBrief(property, user.fullname));
 
   res.status(201).json({
     status: "success",

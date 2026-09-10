@@ -1,9 +1,14 @@
 import type { Request, Response } from "express";
 
 import AppError from "../error/app.error.js";
-import Profile, { publicProfile } from "../models/profile.model.js";
-import User, { publicUser } from "../models/user.model.js";
-import { composeName, ensureProfile } from "../services/profile.service.js";
+import Identity from "../models/identity.model.js";
+import Profile, { publicProfile, type ProfileDoc } from "../models/profile.model.js";
+import User, { publicUser, type UserDoc } from "../models/user.model.js";
+import {
+  composeName,
+  ensureProfile,
+  listingEligibility,
+} from "../services/profile.service.js";
 import { destroyAvatar, uploadAvatar } from "../services/upload.service.js";
 import {
   REALTOR_FIELDS,
@@ -17,14 +22,26 @@ const forbiddenFor = (role: string) => {
   return [...REALTOR_FIELDS, ...SEEKER_FIELDS];
 };
 
+/**
+ * The account envelope. Only a realtor can list, so only a realtor is told whether
+ * they may yet, and the console reads that rather than re-deriving the rule from the
+ * fields it happens to render. The update emits it too: filling the profile in is the
+ * moment the answer changes, so the reply carries the new one.
+ */
+const accountPayload = async (user: UserDoc, profile: ProfileDoc) => ({
+  user: publicUser(user),
+  profile: publicProfile(profile),
+  listing:
+    user.role === "realtor"
+      ? listingEligibility(user, profile, await Identity.findOne({ user: user._id }))
+      : undefined,
+});
+
 export const getMyProfile = async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
   const profile = await ensureProfile(user);
 
-  res.status(200).json({
-    status: "success",
-    data: { user: publicUser(user), profile: publicProfile(profile) },
-  });
+  res.status(200).json({ status: "success", data: await accountPayload(user, profile) });
 };
 
 export const updateMyProfile = async (req: Request, res: Response): Promise<void> => {
@@ -72,7 +89,7 @@ export const updateMyProfile = async (req: Request, res: Response): Promise<void
   res.status(200).json({
     status: "success",
     message: "Profile updated.",
-    data: { user: publicUser(nextUser), profile: publicProfile(updated) },
+    data: await accountPayload(nextUser, updated),
   });
 };
 
