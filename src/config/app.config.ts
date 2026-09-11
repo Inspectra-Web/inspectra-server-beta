@@ -9,6 +9,7 @@ import globalErrorHandler, { notFound } from "../error/global.error.js";
 import adminRoute from "../routes/admin.route.js";
 import authRoute from "../routes/auth.route.js";
 import identityRoute from "../routes/identity.route.js";
+import inquiryRoute from "../routes/inquiry.route.js";
 import profileRoute from "../routes/profile.route.js";
 import propertyRoute from "../routes/property.route.js";
 import realtorRoute from "../routes/realtor.route.js";
@@ -33,6 +34,7 @@ const appConfig = (app: Express): void => {
   app.use("/api/v1/profile", profileRoute);
   app.use("/api/v1/identity", identityRoute);
   app.use("/api/v1/properties", propertyRoute);
+  app.use("/api/v1/inquiries", inquiryRoute);
   app.use("/api/v1/realtors", realtorRoute);
   app.use("/api/v1/admin", adminRoute);
 

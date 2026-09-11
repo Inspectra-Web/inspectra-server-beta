@@ -164,4 +164,63 @@ export const sendListingReviewed = (
   );
 };
 
+/* ------------------------------------------------------------------ *
+ * Inquiry notifications. A thread is the only channel between a buyer and a
+ * realtor, and neither of them is sitting in the console waiting, so each side
+ * is told when the other writes.
+ * ------------------------------------------------------------------ */
+
+/** What an email says about a conversation. The message travels: a notification
+ *  that only says "you have a message" makes the reader open the app to learn
+ *  whether it was worth opening. */
+export interface InquiryBrief {
+  id: string;
+  ref: string;
+  property: string;
+  /** Whoever wrote the message, as the account stores their name. */
+  person: string;
+  message: string;
+}
+
+/**
+ * To the realtor, when a buyer writes. `first` separates a new inquiry from a
+ * follow-up on a thread they have already seen, the way `recheck` does above.
+ */
+export const sendInquiryReceived = (
+  to: string,
+  inquiry: InquiryBrief,
+  first: boolean,
+): void =>
+  notify(inquiry.ref, () =>
+    sendEmail({
+      to,
+      subject: first
+        ? `New inquiry: ${inquiry.property}`
+        : `New message: ${inquiry.property}`,
+      body: [
+        first
+          ? `${inquiry.person} asked about one of your listings.`
+          : `${inquiry.person} sent another message about one of your listings.`,
+        `${inquiry.property}\n${inquiry.ref}`,
+        `Their message:\n${inquiry.message}`,
+        `Reply:\n${envConfig.CLIENT_URL}/realtor/leads/${inquiry.id}`,
+      ].join("\n\n"),
+    }),
+  );
+
+/** To the buyer, when the realtor answers. */
+export const sendInquiryReplied = (to: string, inquiry: InquiryBrief): void =>
+  notify(inquiry.ref, () =>
+    sendEmail({
+      to,
+      subject: `Reply about ${inquiry.property}`,
+      body: [
+        `${inquiry.person} replied to your inquiry.`,
+        `${inquiry.property}\n${inquiry.ref}`,
+        `Their message:\n${inquiry.message}`,
+        `Open the conversation:\n${envConfig.CLIENT_URL}/dashboard/inquiries/${inquiry.id}`,
+      ].join("\n\n"),
+    }),
+  );
+
 export default sendEmail;
