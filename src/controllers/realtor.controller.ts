@@ -5,7 +5,8 @@ import AppError from "../error/app.error.js";
 import User from "../models/user.model.js";
 import { listRealtorsSchema, realtorIdSchema } from "../validators/realtor.validator.js";
 
-/** What the public directory renders. No email, phone or address: this is not the console. */
+/** What the public directory renders. No email or personal address, and no phone on a
+ *  row: one profile hands those out (see getRealtor), a paged list never does. */
 interface PublicRealtorRow {
   _id: Types.ObjectId;
   fullname: string;
@@ -77,6 +78,10 @@ const vettedStages: PipelineStage[] = [
       specialization: { $ifNull: ["$profile.specialization", []] },
       availabilityStatus: { $ifNull: ["$profile.availabilityStatus", ""] },
       contactMeans: { $ifNull: ["$profile.contactMeans", ""] },
+      // Read here so one profile can hand them out, but deliberately not projected
+      // into the directory rows: a paged list of every number is a harvest.
+      phone: { $ifNull: ["$phone", ""] },
+      whatsapp: { $ifNull: ["$profile.whatsapp", ""] },
       socials: { $ifNull: ["$profile.socials", {}] },
       certified: { $ifNull: ["$profile.certified", false] },
       identityVerified: { $ifNull: ["$identity.verified", false] },
@@ -169,6 +174,8 @@ interface RealtorProfileRow extends PublicRealtorRow {
   agencyAddress: string;
   availabilityStatus: string;
   contactMeans: string;
+  phone: string;
+  whatsapp: string;
   socials: { instagram: string; linkedin: string; facebook: string; x: string };
 }
 
@@ -193,6 +200,8 @@ export const getRealtor = async (req: Request, res: Response): Promise<void> => 
         specialization: 1,
         availabilityStatus: 1,
         contactMeans: 1,
+        phone: 1,
+        whatsapp: 1,
         socials: 1,
         certified: 1,
         identityVerified: 1,
@@ -212,7 +221,11 @@ export const getRealtor = async (req: Request, res: Response): Promise<void> => 
         ...publicRealtor(realtor),
         agencyAddress: realtor.agencyAddress,
         availabilityStatus: realtor.availabilityStatus,
+        // A buyer gets to call or message directly. `contactMeans` says which channel
+        // the realtor would rather hear on; it is a statement, not a gate.
         contactMeans: realtor.contactMeans,
+        phone: realtor.phone,
+        whatsapp: realtor.whatsapp,
         socials: realtor.socials,
       },
     },
