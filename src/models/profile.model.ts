@@ -6,7 +6,6 @@ import {
   type PropertyType,
 } from "../types/property.type.js";
 
-const BIO_MAX = 600;
 
 export type Gender = "Female" | "Male" | "Other" | "Prefer not to say";
 export type AvailabilityStatus = "Available" | "Busy" | "Away";
@@ -76,12 +75,9 @@ const profileSchema = new Schema<IProfile>(
     firstName: text(),
     lastName: text(),
     middleName: text(),
-    bio: {
-      type: String,
-      trim: true,
-      maxLength: [BIO_MAX, `Keep it under ${BIO_MAX} characters`],
-      default: "",
-    },
+    // Uncapped: a realtor's own description of how they work is the trust copy a buyer
+    // reads, and a character ceiling is the platform editing it for them.
+    bio: { type: String, trim: true, default: "" },
     
     gender: {
       type: String,

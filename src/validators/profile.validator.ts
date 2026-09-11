@@ -9,7 +9,6 @@ import { PROPERTY_CATEGORIES, PROPERTY_TYPES } from "../types/property.type.js";
 
 // Mirrors client/src/lib/accountSchema.ts so the two ends agree on the rules.
 
-const BIO_MAX = 600;
 const TAGS_MAX = 20;
 
 const line = z.string("Required").trim();
@@ -25,7 +24,8 @@ export const updateProfileSchema = z
     firstName: line.min(1, "Enter your first name"),
     lastName: line.min(1, "Enter your last name"),
     middleName: line,
-    bio: line.max(BIO_MAX, `Keep it under ${BIO_MAX} characters`),
+    // Uncapped, as on the model: the realtor writes their own trust copy.
+    bio: line,
     gender: z.enum(GENDERS),
     address: line,
     city: line,
