@@ -223,6 +223,16 @@ export const listPropertiesSchema = z.object({
    * base and hand one realtor another realtor's listings through `/properties/me`.
    */
   realtor: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid realtor id").optional(),
+  /**
+   * Specific listings, which is how the saved shortlist is read: the ids live on the
+   * profile and the cards come from here, so the browse does the gating and the shaping
+   * exactly once. A single id arrives as a string, several as an array.
+   */
+  ids: z
+    .union([z.string(), z.array(z.string())])
+    .transform((value) => (Array.isArray(value) ? value : [value]))
+    .pipe(z.array(z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid listing id")))
+    .optional(),
   status: z.enum(STATUS_FILTERS).default("all"),
   listingStatus: z.enum(LISTING_FILTERS).default("all"),
   type: z.enum(TYPE_FILTERS).default("all"),

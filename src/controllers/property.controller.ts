@@ -81,6 +81,11 @@ const buildFilter = (
     ];
   }
 
+  // An explicit set of listings, for the saved shortlist. An empty array would match
+  // nothing, which is right: a reader with an empty shortlist has no cards.
+  if (query.ids)
+    filter._id = trusted({ $in: query.ids.map((id) => new Types.ObjectId(id)) });
+
   if (query.city !== "all") filter["address.city"] = query.city;
   if (query.listingStatus !== "all") filter.listingStatus = query.listingStatus;
   if (query.type !== "all") filter.type = query.type;
