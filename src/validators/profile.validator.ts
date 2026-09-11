@@ -90,3 +90,8 @@ export const SEEKER_FIELDS: ProfileField[] = [
   "propertyCategories",
   "propertyInterests",
 ];
+
+/** The listing being saved or unsaved. A param, so it is parsed in the controller. */
+export const savedListingSchema = z.object({
+  id: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid listing id"),
+});

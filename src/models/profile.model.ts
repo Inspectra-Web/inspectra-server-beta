@@ -55,6 +55,7 @@ export interface IProfile {
   preferredCity: string;
   propertyCategories: PropertyCategory[];
   propertyInterests: PropertyType[];
+  savedListings: Types.ObjectId[];
 
   createdAt: Date;
   updatedAt: Date;
@@ -139,6 +140,13 @@ const profileSchema = new Schema<IProfile>(
         values: PROPERTY_TYPES,
         message: "{VALUE} is not a valid property type",
       },
+      default: [],
+    },
+    // The shortlist, in the order it was built. Kept on the profile rather than in its
+    // own collection: it is a handful of ids that only their owner ever reads, and it
+    // stays out of publicProfile because nothing but the saved endpoints wants it.
+    savedListings: {
+      type: [{ type: Schema.Types.ObjectId, ref: "Property" }],
       default: [],
     },
   },

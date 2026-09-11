@@ -6,6 +6,9 @@ import {
   getMyProfile,
   updateMyAvatar,
   updateMyProfile,
+  listSaved,
+  saveListing,
+  unsaveListing,
 } from "../controllers/profile.controller.js";
 import AppError from "../error/app.error.js";
 import { protect } from "../middlewares/auth.middleware.js";
@@ -38,5 +41,10 @@ router.post(
   updateMyAvatar,
 );
 router.delete("/me/avatar", protect, deleteMyAvatar);
+
+// The shortlist. Any signed-in reader: a realtor keeping an eye on a listing is fine.
+router.get("/me/saved", protect, listSaved);
+router.post("/me/saved/:id", protect, saveListing);
+router.delete("/me/saved/:id", protect, unsaveListing);
 
 export default router;

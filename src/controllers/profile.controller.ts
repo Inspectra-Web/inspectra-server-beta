@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
 import Profile, { publicProfile, type ProfileDoc } from "../models/profile.model.js";
+import Property from "../models/property.model.js";
 import User, { publicUser, type UserDoc } from "../models/user.model.js";
 import {
   composeName,
@@ -13,6 +14,7 @@ import { destroyAvatar, uploadAvatar } from "../services/upload.service.js";
 import {
   REALTOR_FIELDS,
   SEEKER_FIELDS,
+  savedListingSchema,
   type UpdateProfileInput,
 } from "../validators/profile.validator.js";
 
@@ -134,5 +136,67 @@ export const deleteMyAvatar = async (req: Request, res: Response): Promise<void>
     status: "success",
     message: "Photo removed.",
     data: { user: publicUser(updated ?? user) },
+  });
+};
+
+/* ------------------------------------------------------------------ *
+ * The shortlist. Ids only: the listings themselves come from the marketplace
+ * browse, which already shapes a card and applies the public gate, so a saved
+ * listing whose realtor was suspended drops out of the page without this
+ * endpoint having to know anything about that.
+ * ------------------------------------------------------------------ */
+
+const savedIds = (profile: ProfileDoc): string[] =>
+  profile.savedListings.map((id) => String(id));
+
+export const listSaved = async (req: Request, res: Response): Promise<void> => {
+  const profile = await ensureProfile(req.user!);
+
+  res.status(200).json({
+    status: "success",
+    data: { ids: savedIds(profile) },
+  });
+};
+
+export const saveListing = async (req: Request, res: Response): Promise<void> => {
+  const { id } = savedListingSchema.parse(req.params);
+
+  const property = await Property.findById(id).select("_id");
+
+  if (!property) throw new AppError("No listing with that id.", 404);
+
+  const profile = await ensureProfile(req.user!);
+
+  // Saving twice is the same shortlist, so it answers 200 rather than a 409: a heart
+  // clicked from two tabs is not an error the reader needs to hear about.
+  if (!profile.savedListings.some((saved) => saved.equals(property._id))) {
+    profile.savedListings.push(property._id);
+    await profile.save({ validateModifiedOnly: true });
+  }
+
+  res.status(200).json({
+    status: "success",
+    message: "Saved.",
+    data: { ids: savedIds(profile) },
+  });
+};
+
+export const unsaveListing = async (req: Request, res: Response): Promise<void> => {
+  const { id } = savedListingSchema.parse(req.params);
+
+  const profile = await ensureProfile(req.user!);
+  const before = profile.savedListings.length;
+
+  profile.savedListings = profile.savedListings.filter((saved) => String(saved) !== id);
+
+  // No existence check on the listing: a saved property that was since deleted still
+  // has to be removable, which a 404 here would prevent.
+  if (profile.savedListings.length !== before)
+    await profile.save({ validateModifiedOnly: true });
+
+  res.status(200).json({
+    status: "success",
+    message: "Removed from saved.",
+    data: { ids: savedIds(profile) },
   });
 };
