@@ -12,7 +12,7 @@ import {
   listProperties,
   updateMyProperty,
 } from "../controllers/property.controller.js";
-import { protect, restrictTo } from "../middlewares/auth.middleware.js";
+import { optionalAuth, protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { documentUpload, photoUpload } from "../services/upload.service.js";
 import {
@@ -35,7 +35,9 @@ const notMe: RequestHandler = (req, _res, next) =>
 // Public: the marketplace browse and one listing, no auth. Above the gate below.
 // A listing is addressed by its slug here; the realtor and admin routes use the id.
 router.get("/", listProperties);
-router.get("/:slug", notMe, getProperty);
+// optionalAuth, not protect: anyone may read a listing, but the view is only counted
+// when we know whose it is. A signed-out visitor still gets the page.
+router.get("/:slug", notMe, optionalAuth, getProperty);
 
 router.use(protect);
 

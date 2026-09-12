@@ -45,6 +45,46 @@ export const protect = async (
   next();
 };
 
+/**
+ * Identity if there is any, and no opinion if there is not. For public routes that
+ * behave differently for someone signed in: the marketplace listing counts a view
+ * against the person reading it, and cannot ask them to log in first.
+ *
+ * Every failure is silent by design. An expired or malformed token here means "not
+ * signed in", not "error": a stale cookie must never 401 a page that anyone on the
+ * internet is allowed to read.
+ */
+export const optionalAuth = async (
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  const { authorization } = req.headers;
+  let token: string | undefined;
+
+  if (authorization?.startsWith("Bearer ")) token = authorization.slice(7);
+  else if (req.cookies?.jwt) token = req.cookies.jwt as string;
+
+  if (!token) return next();
+
+  try {
+    const decoded = jwt.verify(token, envConfig.JWT_SECRET) as TokenPayload;
+    const currentUser = await User.findById(decoded.id).select("+passwordChangedAt");
+
+    // The same three refusals protect makes, minus the shouting.
+    if (
+      currentUser &&
+      !currentUser.changedPasswordAfter(decoded.iat) &&
+      currentUser.status !== "suspended"
+    )
+      req.user = currentUser;
+  } catch {
+    // Not signed in. Carry on.
+  }
+
+  next();
+};
+
 /** Synchronous, so it hands the error to next() rather than throwing. */
 export const restrictTo =
   (...roles: IUser["role"][]): RequestHandler =>

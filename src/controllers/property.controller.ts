@@ -16,6 +16,7 @@ import Property, {
   type PropertyDoc,
   type VerificationStatus,
 } from "../models/property.model.js";
+import PropertyView from "../models/propertyView.model.js";
 import User from "../models/user.model.js";
 import {
   sendListingSubmitted,
@@ -107,23 +108,77 @@ const buildFilter = (
 interface StatusCount {
   _id: VerificationStatus;
   count: number;
+  views: number;
 }
 
-/** Counts for the All / Verified / Pending / Disputed control, in one round trip. */
-const countByStatus = async (filter: QueryFilter<IProperty>) => {
+/**
+ * The realtor's portfolio in one round trip: the counts behind the All / Verified /
+ * Pending / Disputed control, and the views total beside them. Views are summed here
+ * rather than on the client because a page only ever holds `limit` rows, so a total
+ * added up there would understate every portfolio past the first page.
+ */
+const portfolioTally = async (filter: QueryFilter<IProperty>) => {
   const rows = await Property.aggregate<StatusCount>([
     { $match: filter },
-    { $group: { _id: "$verification.status", count: { $sum: 1 } } },
+    {
+      $group: {
+        _id: "$verification.status",
+        count: { $sum: 1 },
+        views: { $sum: "$views" },
+      },
+    },
   ]);
 
   const counts = { all: 0, verified: 0, pending: 0, disputed: 0 };
+  let views = 0;
 
   for (const row of rows) {
     counts[row._id] += row.count;
     counts.all += row.count;
+    views += row.views;
   }
 
-  return counts;
+  return { counts, views };
+};
+
+/**
+ * Count one person's interest in a listing, at most once, ever.
+ *
+ * `views` used to be incremented on every request to the public detail route, which
+ * made it a hit counter: a refresh, a bot, a link preview and the realtor checking
+ * their own page all scored. It now answers the question the number is read as, which
+ * is how many people have looked.
+ *
+ * Three kinds of reader are deliberately not counted. An anonymous visitor, because
+ * there is nothing to count them by that is not a guess (an IP is shared by an office
+ * and changes on a phone). The owner, because a realtor refreshing their own listing
+ * is not demand. An admin, because reviewing a listing is not shopping for it.
+ *
+ * Nothing here may fail the request: a view counter is not worth a 500 on a page the
+ * whole internet is allowed to read, so every error is swallowed.
+ */
+const recordView = async (
+  property: PropertyDoc,
+  user: Request["user"],
+): Promise<void> => {
+  if (!user || user.role === "admin" || property.user.equals(user._id)) return;
+
+  try {
+    // Upsert rather than find-then-create: the write is atomic, and `upsertedCount`
+    // is what tells us this is the first time without a second round trip. The unique
+    // index is what settles two tabs opening the listing at the same moment.
+    const result = await PropertyView.updateOne(
+      { property: property._id, user: user._id },
+      { $setOnInsert: { property: property._id, user: user._id } },
+      { upsert: true },
+    );
+
+    if (result.upsertedCount)
+      await Property.updateOne({ _id: property._id }, { $inc: { views: 1 } });
+  } catch {
+    // A duplicate key from a race, or the database having a bad moment. Either way
+    // the reader still gets their listing.
+  }
 };
 
 /**
@@ -401,8 +456,7 @@ export const getProperty = async (req: Request, res: Response): Promise<void> =>
   if (!owner || owner.status !== "active")
     throw new AppError("No listing with that link.", 404);
 
-  // The only writer of views in the app: nothing else reads a listing publicly.
-  await Property.updateOne({ _id: property._id }, { $inc: { views: 1 } });
+  await recordView(property, req.user);
 
   res.status(200).json({
     status: "success",
@@ -464,8 +518,8 @@ export const listMyProperties = async (req: Request, res: Response): Promise<voi
   const filter =
     status === "all" ? base : { ...base, "verification.status": status };
 
-  const [counts, properties] = await Promise.all([
-    countByStatus(base),
+  const [{ counts, views }, properties] = await Promise.all([
+    portfolioTally(base),
     Property.find(filter)
       .sort(SORTS[sort])
       .skip((page - 1) * limit)
@@ -474,11 +528,15 @@ export const listMyProperties = async (req: Request, res: Response): Promise<voi
 
   const total = counts[status];
 
+  // `views` sits beside `counts`, not inside it: it is one portfolio total, not a
+  // fourth per-status tally, and ListingCounts is shared with two other endpoints
+  // that send no such field.
   res.status(200).json({
     status: "success",
     data: {
       properties: properties.map(detailedProperty),
       counts,
+      views,
       page,
       limit,
       total,
