@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "seed:admin": "tsx src/scripts/admin.script.ts",
     "backfill:slugs": "tsx src/scripts/slug.script.ts",
-    "reset:views": "tsx src/scripts/views.script.ts"
+    "reset:views": "tsx src/scripts/views.script.ts",
+    "migrate:db": "tsx src/scripts/migrate.script.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
