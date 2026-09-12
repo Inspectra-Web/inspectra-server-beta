@@ -135,6 +135,18 @@ userSchema.methods.createEmailVerifyToken = function () {
 
 export type UserDoc = HydratedDocument<IUser, IUserMethods>;
 
+/**
+ * A named human and nothing else: no email, no phone, no account status. It is what
+ * the two ends of a thread or a booking are shown of each other, and more than one
+ * controller builds it, so it belongs here beside `publicUser` rather than privately
+ * in either of them.
+ */
+export const personCard = (user: UserDoc) => ({
+  id: user._id,
+  fullname: user.fullname,
+  avatar: user.avatar,
+});
+
 /** Response allowlist: the schema has no toJSON transform, so shape it here.
  *  `avatarId` and `profile` stay out; they are plumbing, not the account. */
 export const publicUser = (user: UserDoc) => ({

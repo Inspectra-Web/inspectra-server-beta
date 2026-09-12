@@ -9,11 +9,12 @@ import Inquiry, {
 } from "../models/inquiry.model.js";
 import Profile from "../models/profile.model.js";
 import Property, {
+  listingCard,
   type ListingStatus,
   type PropertyDoc,
   type VerificationStatus,
 } from "../models/property.model.js";
-import User, { type UserDoc } from "../models/user.model.js";
+import User, { personCard } from "../models/user.model.js";
 import {
   sendInquiryReceived,
   sendInquiryReplied,
@@ -58,26 +59,6 @@ const findOwn = async (
 
   return inquiry;
 };
-
-/** The listing a thread is about, in the shape both the list row and the detail use. */
-const listingBlock = (property: PropertyDoc) => ({
-  id: property._id,
-  slug: property.slug,
-  title: property.title,
-  image: property.images[0]?.url ?? "",
-  city: property.address.city,
-  fullAddress: property.address.fullAddress,
-  price: property.price,
-  listingStatus: property.listingStatus,
-  status: property.verification.status,
-});
-
-/** The person at the other end: a named human, never a contact card. */
-const personBlock = (user: UserDoc) => ({
-  id: user._id,
-  fullname: user.fullname,
-  avatar: user.avatar,
-});
 
 /**
  * The listing and the counterpart, for one thread. A thread whose listing or whose
@@ -389,11 +370,11 @@ export const getMyInquiry = async (req: Request, res: Response): Promise<void> =
     status: "success",
     data: {
       inquiry: inquiryThread(inquiry),
-      property: listingBlock(property),
+      property: listingCard(property),
       // The business fields the aside renders, mirroring the marketplace's realtor
       // block. Still no email, phone or personal address.
       realtor: {
-        ...personBlock(person),
+        ...personCard(person),
         agencyName: profile?.agencyName ?? "",
         city: profile?.city ?? "",
         certified: profile?.certified ?? false,
@@ -427,8 +408,8 @@ export const getLead = async (req: Request, res: Response): Promise<void> => {
     status: "success",
     data: {
       inquiry: inquiryThread(inquiry),
-      property: listingBlock(property),
-      seeker: personBlock(person),
+      property: listingCard(property),
+      seeker: personCard(person),
     },
   });
 };

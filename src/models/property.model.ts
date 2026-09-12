@@ -415,6 +415,24 @@ propertySchema.pre("validate", function (this: PropertyDoc) {
 });
 
 /**
+ * The listing as a card: the fields a summary tile renders, and nothing more. More
+ * than one controller builds it (a thread and a booking each sit beside one), so it
+ * lives here beside the schema rather than privately in either, which is what keeps
+ * the two views of one listing from drifting apart.
+ */
+export const listingCard = (property: PropertyDoc) => ({
+  id: property._id,
+  slug: property.slug,
+  title: property.title,
+  image: property.images[0]?.url ?? "",
+  city: property.address.city,
+  fullAddress: property.address.fullAddress,
+  price: property.price,
+  listingStatus: property.listingStatus,
+  status: property.verification.status,
+});
+
+/**
  * The whole listing, for the two people entitled to see it: the realtor who owns it
  * and the admin reviewing it. Carries the reviewer's note, which `publicProperty`
  * below withholds. The reviewer's own id stays out of both.

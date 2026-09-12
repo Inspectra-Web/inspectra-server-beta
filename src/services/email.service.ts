@@ -223,4 +223,142 @@ export const sendInquiryReplied = (to: string, inquiry: InquiryBrief): void =>
     }),
   );
 
+/* ------------------------------------------------------------------ *
+ * Inspection notifications. A viewing is an appointment two people have to keep,
+ * so every change of plan has to reach the other one. These are the only messages
+ * in the app with a deadline attached: a request nobody answers expires by itself.
+ * ------------------------------------------------------------------ */
+
+/** What an email says about a viewing. The time travels in full, because a
+ *  notification that makes the reader open the app to learn *when* has failed at
+ *  the one job it had. */
+export interface InspectionBrief {
+  id: string;
+  ref: string;
+  property: string;
+  /** Whoever the mail is about, as the account stores their name. */
+  person: string;
+  slot: Date;
+  /** The free line: the buyer's note when booking, or the realtor's reply. */
+  message: string;
+}
+
+/**
+ * Listings and buyers are Nigerian and the viewing happens at the property, so the
+ * time is written in Lagos regardless of where the server is. Reading it in UTC
+ * would put a morning appointment an hour earlier than anyone agreed.
+ */
+const when = (inspection: InspectionBrief): string =>
+  new Intl.DateTimeFormat("en-NG", {
+    dateStyle: "full",
+    timeStyle: "short",
+    timeZone: "Africa/Lagos",
+  }).format(inspection.slot);
+
+const realtorLink = (inspection: InspectionBrief): string =>
+  `${envConfig.CLIENT_URL}/realtor/inspections/${inspection.id}`;
+
+const seekerLink = (inspection: InspectionBrief): string =>
+  `${envConfig.CLIENT_URL}/dashboard/inspections/${inspection.id}`;
+
+/** To the realtor, when a buyer books. */
+export const sendInspectionRequested = (
+  to: string,
+  inspection: InspectionBrief,
+): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Viewing requested: ${inspection.property}`,
+      body: [
+        `${inspection.person} asked to view one of your listings.`,
+        `${inspection.property}\n${inspection.ref}`,
+        when(inspection),
+        ...(inspection.message ? [`Their note:\n${inspection.message}`] : []),
+        `Confirm or decline it:\n${realtorLink(inspection)}`,
+      ].join("\n\n"),
+    }),
+  );
+
+/** To the realtor, when the buyer moves the time. It is a fresh request, not an
+ *  edit, so the mail says so: the old slot is no longer in their diary. */
+export const sendInspectionRescheduled = (
+  to: string,
+  inspection: InspectionBrief,
+): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Viewing moved: ${inspection.property}`,
+      body: [
+        `${inspection.person} moved their viewing, so it needs confirming again.`,
+        `${inspection.property}\n${inspection.ref}`,
+        `The new time:\n${when(inspection)}`,
+        `Confirm or decline it:\n${realtorLink(inspection)}`,
+      ].join("\n\n"),
+    }),
+  );
+
+const OUTCOMES = {
+  confirmed: {
+    subject: (property: string) => `Viewing confirmed: ${property}`,
+    lead: "The realtor confirmed your viewing. Put it in your calendar.",
+  },
+  declined: {
+    subject: (property: string) => `Viewing declined: ${property}`,
+    lead: "The realtor cannot make this viewing. You can propose another time on the listing.",
+  },
+  completed: {
+    subject: (property: string) => `Viewing closed: ${property}`,
+    lead: "The realtor marked this viewing as done.",
+  },
+};
+
+/** To the buyer, when the realtor answers. */
+export const sendInspectionDecided = (
+  to: string,
+  inspection: InspectionBrief,
+  outcome: keyof typeof OUTCOMES,
+): void => {
+  const { subject, lead } = OUTCOMES[outcome];
+
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: subject(inspection.property),
+      body: [
+        lead,
+        `${inspection.property}\n${inspection.ref}`,
+        when(inspection),
+        ...(inspection.message
+          ? [`From ${inspection.person}:\n${inspection.message}`]
+          : []),
+        `Open it:\n${seekerLink(inspection)}`,
+      ].join("\n\n"),
+    }),
+  );
+};
+
+/** To whoever did not call it off. `by` is the party who cancelled, so the link
+ *  goes to the other one's console. */
+export const sendInspectionCancelled = (
+  to: string,
+  inspection: InspectionBrief,
+  by: "seeker" | "realtor",
+): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Viewing cancelled: ${inspection.property}`,
+      body: [
+        by === "seeker"
+          ? `${inspection.person} cancelled their viewing.`
+          : `${inspection.person} cancelled this viewing.`,
+        `${inspection.property}\n${inspection.ref}`,
+        `It was booked for:\n${when(inspection)}`,
+        `Open it:\n${by === "seeker" ? realtorLink(inspection) : seekerLink(inspection)}`,
+      ].join("\n\n"),
+    }),
+  );
+
 export default sendEmail;
