@@ -61,6 +61,8 @@ interface DirectoryRow {
 interface DirectoryPage {
   rows: DirectoryRow[];
   total: { count: number }[];
+  roles: { _id: IUser["role"]; count: number }[];
+  statuses: { _id: IUser["status"]; count: number }[];
 }
 
 const escapeRegex = (value: string): string =>
@@ -80,13 +82,16 @@ const directoryUser = (row: DirectoryRow) => ({
 export const listUsers = async (req: Request, res: Response): Promise<void> => {
   const { q, role, status, page, limit } = listUsersSchema.parse(req.query);
 
-  const accountMatch: Record<string, unknown> = {};
-  if (role !== "all") accountMatch.role = role;
-  if (status !== "all") accountMatch.status = status;
+  // Role and status are applied inside the facet rather than at the head, so the two
+  // count branches below see every account. It is the only way to satisfy the standing
+  // rule that choosing a segment cannot zero the others, and it is the same trade-off
+  // listListings took: the profiles $lookup now runs over the wider set.
+  const roleMatch: PipelineStage.FacetPipelineStage[] =
+    role === "all" ? [] : [{ $match: { role } }];
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all" ? [] : [{ $match: { status } }];
 
   const pipeline: PipelineStage[] = [];
-
-  if (Object.keys(accountMatch).length) pipeline.push({ $match: accountMatch });
 
   pipeline.push(
     {
@@ -112,6 +117,8 @@ export const listUsers = async (req: Request, res: Response): Promise<void> => {
     $facet: {
       // _id breaks ties so a row cannot slip between pages on equal timestamps.
       rows: [
+        ...roleMatch,
+        ...statusMatch,
         { $sort: { createdAt: -1, _id: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
@@ -127,7 +134,9 @@ export const listUsers = async (req: Request, res: Response): Promise<void> => {
           },
         },
       ],
-      total: [{ $count: "count" }],
+      total: [...roleMatch, ...statusMatch, { $count: "count" }],
+      roles: [{ $group: { _id: "$role", count: { $sum: 1 } } }],
+      statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
     },
   });
 
@@ -136,10 +145,30 @@ export const listUsers = async (req: Request, res: Response): Promise<void> => {
   const rows = result?.rows ?? [];
   const total = result?.total[0]?.count ?? 0;
 
+  const counts = {
+    all: 0,
+    seeker: 0,
+    realtor: 0,
+    admin: 0,
+    active: 0,
+    suspended: 0,
+    pending: 0,
+  };
+
+  // `all` is summed from the roles branch alone: every account carries exactly one
+  // role, so counting both branches would double it.
+  for (const row of result?.roles ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
+  for (const row of result?.statuses ?? []) counts[row._id] += row.count;
+
   res.status(200).json({
     status: "success",
     data: {
       users: rows.map(directoryUser),
+      counts,
       page,
       limit,
       total,
@@ -211,6 +240,9 @@ interface RealtorRow {
 interface RealtorPage {
   rows: RealtorRow[];
   total: { count: number }[];
+  statuses: { _id: IUser["status"]; count: number }[];
+  certified: { count: number }[];
+  identity: { count: number }[];
 }
 
 const realtorRow = (row: RealtorRow) => ({
@@ -229,10 +261,13 @@ const realtorRow = (row: RealtorRow) => ({
 export const listRealtors = async (req: Request, res: Response): Promise<void> => {
   const { q, certified, identity, status, page, limit } = listRealtorsSchema.parse(req.query);
 
-  const accountMatch: Record<string, unknown> = { role: "realtor" };
-  if (status !== "all") accountMatch.status = status;
+  // role stays in the head: it is what makes this the realtor directory rather than a
+  // filter on it. The three real filters move into the facet so the count branches
+  // below see every realtor, the way listUsers and listListings do.
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all" ? [] : [{ $match: { status } }];
 
-  const pipeline: PipelineStage[] = [{ $match: accountMatch }];
+  const pipeline: PipelineStage[] = [{ $match: { role: "realtor" } }];
 
   pipeline.push(
     {
@@ -263,10 +298,13 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
     },
   );
 
-  if (certified !== "all") pipeline.push({ $match: { certified: certified === "yes" } });
+  const certifiedMatch: PipelineStage.FacetPipelineStage[] =
+    certified === "all" ? [] : [{ $match: { certified: certified === "yes" } }];
 
-  if (identity !== "all")
-    pipeline.push({ $match: { identityVerified: identity === "verified" } });
+  const identityMatch: PipelineStage.FacetPipelineStage[] =
+    identity === "all"
+      ? []
+      : [{ $match: { identityVerified: identity === "verified" } }];
 
   if (q) {
     const pattern = new RegExp(escapeRegex(q), "i");
@@ -285,6 +323,9 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
   pipeline.push({
     $facet: {
       rows: [
+        ...statusMatch,
+        ...certifiedMatch,
+        ...identityMatch,
         { $sort: { createdAt: -1, _id: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
@@ -302,7 +343,15 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
           },
         },
       ],
-      total: [{ $count: "count" }],
+      total: [
+        ...statusMatch,
+        ...certifiedMatch,
+        ...identityMatch,
+        { $count: "count" },
+      ],
+      statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+      certified: [{ $match: { certified: true } }, { $count: "count" }],
+      identity: [{ $match: { identityVerified: true } }, { $count: "count" }],
     },
   });
 
@@ -311,10 +360,26 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
   const rows = result?.rows ?? [];
   const total = result?.total[0]?.count ?? 0;
 
+  const counts = {
+    all: 0,
+    certified: result?.certified[0]?.count ?? 0,
+    identityVerified: result?.identity[0]?.count ?? 0,
+    active: 0,
+    suspended: 0,
+    pending: 0,
+  };
+
+  // Every realtor carries exactly one status, so this branch is also the head count.
+  for (const row of result?.statuses ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
   res.status(200).json({
     status: "success",
     data: {
       realtors: rows.map(realtorRow),
+      counts,
       page,
       limit,
       total,
