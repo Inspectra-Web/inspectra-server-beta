@@ -15,6 +15,16 @@ export const composeName = (parts) => [parts.firstName, parts.middleName, parts.
     .map((part) => part.trim())
     .filter(Boolean)
     .join(" ");
+export const words = (value) => value
+    .toLowerCase()
+    .replace(/[^a-z]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+/** Every name on the record has to appear on the account. Middle names are ignored. */
+export const namesMatch = (record, fullname) => {
+    const account = words(fullname);
+    return record.length > 0 && record.every((name) => account.includes(name));
+};
 export const ensureProfile = async (user) => {
     const existing = await Profile.findOne({ user: user._id });
     if (existing)

@@ -1,10 +1,11 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, listRealtors, listUsers, reviewListing, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, getAdminSession, getUser, getListing, listListings, listRealtors, listUsers, reviewListing, reviewRealtorAddress, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
+import { reviewAddressSchema } from "../validators/agency.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
 const tooManyAttempts = (_req, _res, next) => next(new AppError("Too many attempts. Please try again later.", 429));
 const adminLimiter = rateLimit({
@@ -25,6 +26,7 @@ router.get("/users/:id", protect, restrictTo("admin"), getUser);
 // The review lives here, not on the property router: that one is realtor-only, so an
 // admin cannot reach any route on it.
 router.patch("/listings/:id/verification", protect, restrictTo("admin"), validate(reviewListingSchema), reviewListing);
-router.patch("/users/:id/status", protect, restrictTo("admin"), validate(userStatusSchema), updateUserStatus);
+router.patch("/users/:id/status", protect, restrictTo("admin"), validate(userStatusSchema), reviewRealtorAddress, updateUserStatus);
+router.patch("/realtors/:id/address", protect, restrictTo("admin"), validate(reviewAddressSchema), reviewRealtorAddress);
 export default router;
 //# sourceMappingURL=admin.route.js.map

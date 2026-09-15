@@ -7,6 +7,7 @@ import envConfig from "./env.config.js";
 import globalErrorHandler, { notFound } from "../error/global.error.js";
 import adminRoute from "../routes/admin.route.js";
 import authRoute from "../routes/auth.route.js";
+import agencyRoute from "../routes/agency.route.js";
 import identityRoute from "../routes/identity.route.js";
 import inquiryRoute from "../routes/inquiry.route.js";
 import inspectionRoute from "../routes/inspection.route.js";
@@ -28,6 +29,7 @@ const appConfig = (app) => {
     app.use("/api/v1/auth", authRoute);
     app.use("/api/v1/profile", profileRoute);
     app.use("/api/v1/identity", identityRoute);
+    app.use("/api/v1/agency", agencyRoute);
     app.use("/api/v1/properties", propertyRoute);
     app.use("/api/v1/inquiries", inquiryRoute);
     app.use("/api/v1/inspections", inspectionRoute);

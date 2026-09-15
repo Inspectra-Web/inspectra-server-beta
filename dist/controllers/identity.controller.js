@@ -1,17 +1,8 @@
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
+import { namesMatch, words } from "../services/profile.service.js";
 import { uploadAvatar } from "../services/upload.service.js";
-const words = (value) => value
-    .toLowerCase()
-    .replace(/[^a-z]+/g, " ")
-    .split(" ")
-    .filter(Boolean);
-/** Every name on the record has to appear on the account. Middle names are ignored. */
-const namesMatch = (record, fullname) => {
-    const account = words(fullname);
-    return record.length > 0 && record.every((name) => account.includes(name));
-};
 const check = async (document, number, selfie) => {
     const response = await fetch(`${envConfig.DOJAH_BASE_URL}/api/v1/kyc/${document}/verify`, {
         method: "POST",

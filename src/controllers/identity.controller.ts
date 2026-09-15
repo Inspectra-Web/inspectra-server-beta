@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { publicIdentity, type IdDocument } from "../models/identity.model.js";
+import { namesMatch, words } from "../services/profile.service.js";
 import { uploadAvatar } from "../services/upload.service.js";
 import type { VerifyIdentityInput } from "../validators/identity.validator.js";
 
@@ -12,20 +13,6 @@ interface DojahEntity {
   last_name?: string;
   selfie_verification?: { confidence_value: number; match: boolean };
 }
-
-const words = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z]+/g, " ")
-    .split(" ")
-    .filter(Boolean);
-
-/** Every name on the record has to appear on the account. Middle names are ignored. */
-const namesMatch = (record: string[], fullname: string): boolean => {
-  const account = words(fullname);
-
-  return record.length > 0 && record.every((name) => account.includes(name));
-};
 
 const check = async (
   document: IdDocument,

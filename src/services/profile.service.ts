@@ -29,6 +29,20 @@ export const composeName = (parts: {
     .filter(Boolean)
     .join(" ");
 
+export const words = (value: string): string[] =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+
+/** Every name on the record has to appear on the account. Middle names are ignored. */
+export const namesMatch = (record: string[], fullname: string): boolean => {
+  const account = words(fullname);
+
+  return record.length > 0 && record.every((name) => account.includes(name));
+};
+
 export const ensureProfile = async (user: UserDoc): Promise<ProfileDoc> => {
   const existing = await Profile.findOne({ user: user._id });
   if (existing) return existing;

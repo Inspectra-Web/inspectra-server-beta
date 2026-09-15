@@ -10,12 +10,14 @@ import {
   listRealtors,
   listUsers,
   reviewListing,
+  reviewRealtorAddress,
   updateUserStatus,
 } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
+import { reviewAddressSchema } from "../validators/agency.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
 
 const tooManyAttempts: RequestHandler = (_req, _res, next) =>
@@ -60,7 +62,16 @@ router.patch(
   protect,
   restrictTo("admin"),
   validate(userStatusSchema),
+  reviewRealtorAddress,
   updateUserStatus,
+);
+
+router.patch(
+  "/realtors/:id/address",
+  protect,
+  restrictTo("admin"),
+  validate(reviewAddressSchema),
+  reviewRealtorAddress,
 );
 
 export default router;

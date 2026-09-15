@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import type { PipelineStage, Types } from "mongoose";
 
 import AppError from "../error/app.error.js";
+import Agency, { publicAgency, type AgencyDoc } from "../models/agency.model.js";
+import type { ReviewAddressInput } from "../validators/agency.validator.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
 import Property, {
@@ -177,6 +179,60 @@ export const listUsers = async (req: Request, res: Response): Promise<void> => {
   });
 };
 
+/**
+ * publicAgency plus the bill itself. Private to this controller: a realtor never needs
+ * the file back, but an admin settling a dispute has to see what was submitted.
+ */
+const adminAgency = (agency: AgencyDoc) => ({
+  ...publicAgency(agency),
+  bill: agency.address.document.url,
+});
+
+/**
+ * The manual half of agency verification. A Nigerian utility bill names the supply, not
+ * reliably the occupier (shared compounds, the landlord's name, a bank-app prepaid
+ * receipt), so there is nothing an API could match on: a person reads it against the
+ * meter number and answers yes or no. Nothing is copied off the bill.
+ */
+export const reviewRealtorAddress = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  const { id } = userIdSchema.parse(req.params);
+  const { status, reason }: ReviewAddressInput = req.body;
+
+  const user = await User.findById(id);
+
+  if (!user) throw new AppError("No user with that id.", 404);
+  if (user.role !== "realtor")
+    throw new AppError("That account is not a realtor.", 400);
+
+  const agency = await Agency.findOne({ user: user._id });
+
+  if (!agency?.address.document.url)
+    throw new AppError("That realtor has not sent a bill.", 404);
+
+  if (agency.address.status === status)
+    throw new AppError(`That address is already ${status}.`, 409);
+
+  agency.address.status = status;
+  // The reviewer's reason only survives while the flag does.
+  agency.address.reason = status === "flagged" ? (reason ?? "") : "";
+  agency.address.verifiedAt = status === "verified" ? new Date() : undefined;
+  agency.address.reviewedBy = req.user!._id;
+
+  await agency.save();
+
+  res.status(200).json({
+    status: "success",
+    message:
+      status === "verified"
+        ? "That address is verified."
+        : "That bill was flagged and the realtor can send another.",
+    data: { agency: adminAgency(agency) },
+  });
+};
+
 export const getUser = async (req: Request, res: Response): Promise<void> => {
   const { id } = userIdSchema.parse(req.params);
 
@@ -186,9 +242,10 @@ export const getUser = async (req: Request, res: Response): Promise<void> => {
 
   const profile = await Profile.findOne({ user: user._id });
 
-  // Identity is realtor-only, so a seeker or admin never needs the lookup.
-  const identity =
-    user.role === "realtor" ? await Identity.findOne({ user: user._id }) : null;
+  // Identity and agency are realtor-only, so a seeker or admin never needs the lookups.
+  const realtor = user.role === "realtor";
+  const identity = realtor ? await Identity.findOne({ user: user._id }) : null;
+  const agency = realtor ? await Agency.findOne({ user: user._id }) : null;
 
   res.status(200).json({
     status: "success",
@@ -196,6 +253,7 @@ export const getUser = async (req: Request, res: Response): Promise<void> => {
       user: publicUser(user),
       profile: profile ? publicProfile(profile) : null,
       identity: identity ? publicIdentity(identity) : null,
+      agency: agency ? adminAgency(agency) : null,
     },
   });
 };

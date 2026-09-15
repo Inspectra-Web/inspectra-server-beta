@@ -9,10 +9,13 @@ import AppError from "../error/app.error.js";
 export const AVATAR_MAX_MB = 2;
 export const PHOTO_MAX_MB = 5;
 export const DOCUMENT_MAX_MB = 10;
+export const BILL_MAX_MB = 10;
 
 const AVATAR_FOLDER = "inspectra/avatars";
 const PHOTO_FOLDER = "inspectra/properties";
 const DOCUMENT_FOLDER = "inspectra/documents";
+const BILL_FOLDER = "inspectra/bills";
+const BILL_SIZE = 2000;
 const AVATAR_SIZE = 512;
 const PHOTO_WIDTH = 1600;
 const PHOTO_HEIGHT = 1200;
@@ -97,6 +100,22 @@ export const documentUpload = multer({
     }
 
     cb(new AppError("Upload the document as a PDF.", 400));
+  },
+});
+
+// A photo *or* a PDF, which inverts the PDF-only rule above on purpose: a realtor
+// photographs their utility bill far more often than they scan it, and a prepaid top-up
+// receipt is usually a screenshot from a bank app.
+export const billUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: BILL_MAX_MB * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype === "application/pdf") {
+      cb(null, true);
+      return;
+    }
+
+    cb(new AppError("Upload the bill as a photo or a PDF.", 400));
   },
 });
 
@@ -230,6 +249,28 @@ export const uploadPhoto = async (buffer: Buffer): Promise<UploadedImage> => {
 // the reviewer needs to read a survey plan.
 export const uploadDocument = async (buffer: Buffer): Promise<UploadedFile> =>
   send(buffer, DOCUMENT_FOLDER, "auto");
+
+/**
+ * A utility bill, kept as evidence and read by the verification provider.
+ *
+ * Deliberately not uploadPhoto: that burns the INSPECTRA mark across the centre of the
+ * frame, which is exactly where the address sits. Deliberately not uploadAvatar either,
+ * which would crop a bill to its letterhead. Quality is higher than an avatar's because
+ * a machine reads this one.
+ */
+export const uploadBill = async (buffer: Buffer): Promise<UploadedImage> => {
+  if (isPdf(buffer)) return send(buffer, BILL_FOLDER, "image");
+
+  const image = await sharp(buffer)
+    .rotate()
+    .resize(BILL_SIZE, BILL_SIZE, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  return send(image, BILL_FOLDER, "image");
+};
+
+
 
 // Never throws: a stale id must not block the update that replaces the image.
 export const destroyAsset = async (
