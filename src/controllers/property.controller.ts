@@ -232,10 +232,13 @@ const listingBrief = (property: PropertyDoc, realtor: string): ListingBrief => (
  * the browse and by a single listing, so one hidden from the grid cannot be
  * reached by typing its URL: the failure vettedStages exists to prevent.
  *
- * Verification status is deliberately not a gate. A pending or disputed listing
- * stays public and says so, which is the whole point of the segmented control.
+ * Verification status is a gate: only a verified listing is public. A pending or
+ * disputed one is visible to its realtor in their console and to an admin in
+ * review, and nowhere else, so the marketplace carries one status and the badge
+ * on a card is a statement rather than a warning.
  */
 const publicStages: PipelineStage[] = [
+  { $match: { "verification.status": "verified" } },
   { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
   { $unwind: "$realtor" },
   { $match: { "realtor.status": "active" } },
@@ -272,7 +275,6 @@ interface MarketplaceRow {
 interface MarketplacePage {
   rows: MarketplaceRow[];
   total: { count: number }[];
-  counts: { _id: VerificationStatus; count: number }[];
   cities: { _id: string }[];
   types: { _id: PropertyType }[];
 }
@@ -305,7 +307,7 @@ const marketplaceRow = (row: MarketplaceRow) => ({
 
 export const listProperties = async (req: Request, res: Response): Promise<void> => {
   const query = listPropertiesSchema.parse(req.query);
-  const { city, type, status, realtor, sort, page, limit } = query;
+  const { city, type, realtor, sort, page, limit } = query;
 
   // Applied here rather than inside buildFilter: that helper also builds a realtor's
   // own list from a { user } base, and a clause there would overwrite it.
@@ -354,17 +356,11 @@ export const listProperties = async (req: Request, res: Response): Promise<void>
   const typeMatch: PipelineStage.FacetPipelineStage[] =
     type === "all" ? [] : [{ $match: { type } }];
 
-  // The status clause lives in the branches that page, and deliberately not in
-  // counts: choosing one segment cannot be allowed to zero the other three.
-  const statusMatch: PipelineStage.FacetPipelineStage[] =
-    status === "all" ? [] : [{ $match: { status } }];
-
   pipeline.push({
     $facet: {
       rows: [
         ...cityMatch,
         ...typeMatch,
-        ...statusMatch,
         { $sort: SORTS[sort] },
         { $skip: (page - 1) * limit },
         { $limit: limit },
@@ -393,14 +389,9 @@ export const listProperties = async (req: Request, res: Response): Promise<void>
           },
         },
       ],
-      total: [...cityMatch, ...typeMatch, ...statusMatch, { $count: "count" }],
-      counts: [
-        ...cityMatch,
-        ...typeMatch,
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ],
-      // Neither branch takes any of the three: a filter must never narrow the
-      // list of options it was itself chosen from.
+      total: [...cityMatch, ...typeMatch, { $count: "count" }],
+      // Neither branch takes either filter: one must never narrow the list of
+      // options it was itself chosen from.
       cities: [
         { $match: { city: { $ne: "" } } },
         { $group: { _id: "$city" } },
@@ -415,18 +406,10 @@ export const listProperties = async (req: Request, res: Response): Promise<void>
   const rows = result?.rows ?? [];
   const total = result?.total[0]?.count ?? 0;
 
-  const counts = { all: 0, verified: 0, pending: 0, disputed: 0 };
-
-  for (const row of result?.counts ?? []) {
-    counts[row._id] += row.count;
-    counts.all += row.count;
-  }
-
   res.status(200).json({
     status: "success",
     data: {
       listings: rows.map(marketplaceRow),
-      counts,
       cities: (result?.cities ?? []).map((c) => c._id),
       types: (result?.types ?? []).map((t) => t._id),
       page,
@@ -450,10 +433,19 @@ export const getProperty = async (req: Request, res: Response): Promise<void> =>
     Identity.findOne({ user: property.user }),
   ]);
 
-  // The same gate publicStages applies to the browse, and a 404 rather than the
-  // 403 findOwned gives a realtor: what is hidden here is the account, not the
-  // verification status, and a hidden account is not confirmed to exist.
+  // The same gate publicStages applies to the browse, so a listing hidden from
+  // the grid cannot be reached by typing its URL. A 404 rather than the 403
+  // findOwned gives a realtor: nothing here confirms the listing exists.
   if (!owner || owner.status !== "active")
+    throw new AppError("No listing with that link.", 404);
+
+  // Unverified is not public, but it is not hidden from the two people entitled
+  // to see it: its realtor, who is linked here from their own inspections and
+  // leads, and an admin, who reviews it. Everyone else gets the 404.
+  const privileged =
+    !!req.user && (req.user.role === "admin" || property.user.equals(req.user._id));
+
+  if (property.verification.status !== "verified" && !privileged)
     throw new AppError("No listing with that link.", 404);
 
   await recordView(property, req.user);
