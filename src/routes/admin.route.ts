@@ -7,6 +7,7 @@ import {
   getUser,
   getListing,
   listListings,
+  getPayment,
   listPayments,
   listRealtors,
   listUsers,
@@ -47,6 +48,10 @@ router.get("/realtors", protect, restrictTo("admin"), listRealtors);
 router.get("/listings", protect, restrictTo("admin"), listListings);
 
 router.get("/payments", protect, restrictTo("admin"), listPayments);
+
+// Below the literal above, and keyed on the reference rather than an id: that is the
+// string on the realtor's receipt and in Flutterwave.
+router.get("/payments/:reference", protect, restrictTo("admin"), getPayment);
 
 router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 

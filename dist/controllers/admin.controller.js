@@ -10,7 +10,7 @@ import { sendListingReviewed } from "../services/email.service.js";
 import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
 import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, userIdSchema, } from "../validators/admin.validator.js";
-import { listAdminPaymentsSchema, } from "../validators/payment.validator.js";
+import { listAdminPaymentsSchema, paymentReferenceSchema, } from "../validators/payment.validator.js";
 export const adminLogin = async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email }).select("+password");
@@ -718,6 +718,76 @@ export const listPayments = async (req, res) => {
             limit,
             total,
             pages: Math.max(1, Math.ceil(total / limit)),
+        },
+    });
+};
+/**
+ * The admin's view of one payment, which carries more than the realtor's own.
+ *
+ * `flwId` and `flwRef` are here and deliberately not in `publicPayment`: they mean
+ * nothing to the person who paid, and they are the only way an admin finds the same
+ * transaction in Flutterwave's dashboard when a figure has to be reconciled.
+ */
+const adminPayment = (payment) => ({
+    id: payment._id,
+    reference: payment.reference,
+    kind: payment.kind,
+    tier: payment.tier,
+    cadence: payment.cadence,
+    amount: payment.amount,
+    currency: payment.currency,
+    status: payment.status,
+    channel: payment.channel,
+    cardBrand: payment.cardBrand,
+    cardLast4: payment.cardLast4,
+    flwId: payment.flwId,
+    flwRef: payment.flwRef,
+    failureReason: payment.failureReason,
+    paidAt: payment.paidAt,
+    periodStart: payment.periodStart,
+    periodEnd: payment.periodEnd,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
+});
+/**
+ * One payment in full, with the account behind it and the plan it bought.
+ *
+ * Keyed on the reference rather than the id, because that is the string an admin has in
+ * front of them: it is on the realtor's receipt and it is the `tx_ref` in Flutterwave.
+ */
+export const getPayment = async (req, res) => {
+    const { reference } = paymentReferenceSchema.parse(req.params);
+    const payment = await Payment.findOne({ reference });
+    if (!payment)
+        throw new AppError("No payment with that reference.", 404);
+    const realtor = await User.findById(payment.user);
+    if (!realtor)
+        throw new AppError("That payment has no account behind it.", 404);
+    // Reading it advances the lifecycle, which is the point: the admin should see where
+    // the clock actually stands, not the last state someone else's read happened to leave.
+    const subscription = await resolveSubscription(realtor._id);
+    const allowance = await listingAllowance(realtor._id, subscription);
+    // What else this realtor has paid, so a disputed figure can be read in context.
+    const history = await Payment.find({ user: realtor._id })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(10);
+    res.status(200).json({
+        status: "success",
+        data: {
+            payment: adminPayment(payment),
+            realtor: {
+                id: realtor._id,
+                fullname: realtor.fullname,
+                email: realtor.email,
+                phone: realtor.phone,
+                avatar: realtor.avatar,
+                status: realtor.status,
+                createdAt: realtor.createdAt,
+            },
+            subscription: publicSubscription(subscription),
+            plan: entitlements(subscription),
+            allowance,
+            history: history.map(adminPayment),
         },
     });
 };
