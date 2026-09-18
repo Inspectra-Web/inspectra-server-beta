@@ -70,6 +70,19 @@ export const LISTING_STATUSES: ListingStatus[] = [
   "leased",
 ];
 
+/**
+ * The statuses that occupy a slot against the realtor plan. A listing that has been
+ * sold, rented or leased is a record of a deal, not an advert competing for attention,
+ * so it stops counting. Verification state is deliberately not part of this: a pending
+ * listing is exactly the one sitting in the review queue the subscription pays for.
+ */
+export const ACTIVE_LISTING_STATUSES: ListingStatus[] = [
+  "sale",
+  "rent",
+  "lease",
+  "shortlet",
+];
+
 export const VERIFICATION_STATUSES: VerificationStatus[] = [
   "pending",
   "verified",
@@ -182,6 +195,15 @@ export interface IProperty {
   };
 
   views: number;
+
+  /**
+   * Over the realtor's plan allowance, so held back from the public site. A flag and
+   * never a delete: a lapsed plan is reversible and the listing comes straight back.
+   */
+  hiddenByPlan: boolean;
+
+  /** Last re-confirmed as still available. Moves the listing in the newest sort only. */
+  refreshedAt: Date;
 
   createdAt: Date;
   updatedAt: Date;
@@ -373,6 +395,10 @@ const propertySchema = new Schema<IProperty>(
     },
 
     views: count(),
+    hiddenByPlan: { type: Boolean, default: false },
+    // Defaulted to now so it equals createdAt on a new listing, which lets the newest
+    // sort key on it alone rather than coalescing two fields on every read.
+    refreshedAt: { type: Date, default: Date.now },
   },
   { timestamps: true },
 );

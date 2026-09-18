@@ -4,11 +4,13 @@ import { Types, trusted } from "mongoose";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
 import Profile from "../models/profile.model.js";
-import Property, { detailedProperty, publicProperty, } from "../models/property.model.js";
+import Property, { ACTIVE_LISTING_STATUSES, detailedProperty, publicProperty, } from "../models/property.model.js";
 import PropertyView from "../models/propertyView.model.js";
+import { PLANS } from "../models/subscription.model.js";
 import User from "../models/user.model.js";
 import { sendListingSubmitted, sendListingUpdated, } from "../services/email.service.js";
 import { ensureProfile, listingEligibility } from "../services/profile.service.js";
+import { entitlements, listingAllowance, resolveSubscription, } from "../services/subscription.service.js";
 import { destroyAsset, isPdf, uploadDocument, uploadPhoto, } from "../services/upload.service.js";
 import { listPropertiesSchema, documentIdSchema, propertyIdSchema, propertySlugSchema, typeFitsCategory, } from "../validators/property.validator.js";
 const IMAGES_MAX = 20;
@@ -18,7 +20,7 @@ const SORTS = {
     // Descending on the status string reads verified, pending, disputed: the trust
     // order already, so no computed rank field is needed.
     recommended: { "verification.status": -1, createdAt: -1, _id: -1 },
-    newest: { createdAt: -1, _id: -1 },
+    newest: { refreshedAt: -1, _id: -1 },
     "price-asc": { price: 1, _id: 1 },
     "price-desc": { price: -1, _id: -1 },
     views: { views: -1, createdAt: -1, _id: -1 },
@@ -173,7 +175,7 @@ const listingBrief = (property, realtor) => ({
  * on a card is a statement rather than a warning.
  */
 const publicStages = [
-    { $match: { "verification.status": "verified" } },
+    { $match: { "verification.status": "verified", hiddenByPlan: { $ne: true } } },
     { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
     { $unwind: "$realtor" },
     { $match: { "realtor.status": "active" } },
@@ -329,7 +331,9 @@ export const getProperty = async (req, res) => {
     // to see it: its realtor, who is linked here from their own inspections and
     // leads, and an admin, who reviews it. Everyone else gets the 404.
     const privileged = !!req.user && (req.user.role === "admin" || property.user.equals(req.user._id));
-    if (property.verification.status !== "verified" && !privileged)
+    // Held back by the plan reads the same way to a visitor as not yet verified: the
+    // listing is not public, so typing its URL finds nothing either.
+    if ((property.verification.status !== "verified" || property.hiddenByPlan) && !privileged)
         throw new AppError("No listing with that link.", 404);
     await recordView(property, req.user);
     res.status(200).json({
@@ -349,6 +353,24 @@ export const getProperty = async (req, res) => {
         },
     });
 };
+/**
+ * The plan cap, checked before a listing can take a slot.
+ *
+ * Deliberately not folded into listingEligibility: that answers "may you list at all"
+ * and renders in the composer as a checklist of missing profile fields, every one of
+ * which the realtor fixes by filling something in. Being full is not that, and putting
+ * it in the same list would have the gate telling someone their profile is incomplete
+ * when the only thing missing is a bigger plan.
+ */
+const assertListingRoom = async (user) => {
+    const subscription = await resolveSubscription(user._id);
+    const { limit, remaining } = await listingAllowance(user._id, subscription);
+    if (remaining > 0)
+        return;
+    const plan = PLANS[subscription.tier].name;
+    throw new AppError(`You have used all ${limit} listing${limit === 1 ? "" : "s"} on your ${plan} plan. ` +
+        `Upgrade, or mark a listing sold, to add another.`, 403);
+};
 export const createProperty = async (req, res) => {
     const body = req.body;
     const user = req.user;
@@ -366,6 +388,7 @@ export const createProperty = async (req, res) => {
             : missing[0];
         throw new AppError(`You need ${needs} before you can list a property.`, 403);
     }
+    await assertListingRoom(user);
     const property = await Property.create({ ...body, user: user._id });
     sendListingSubmitted(listingBrief(property, user.fullname));
     res.status(201).json({
@@ -416,6 +439,13 @@ export const updateMyProperty = async (req, res) => {
     const body = req.body;
     const property = await findOwned(id, req.user._id);
     const { features, fees, images, documents, ...rest } = body;
+    // Putting a sold or rented listing back on the market takes a slot back, so it meets
+    // the same cap a new listing does. An edit that leaves the status alone never can.
+    const reactivating = rest.listingStatus !== undefined &&
+        !ACTIVE_LISTING_STATUSES.includes(property.listingStatus) &&
+        ACTIVE_LISTING_STATUSES.includes(rest.listingStatus);
+    if (reactivating)
+        await assertListingRoom(req.user);
     Object.assign(property, rest);
     // Merged, not replaced: the form sends only the keys it has, and a land listing
     // sends almost none. Replacing would reset the rest to 0.
@@ -523,6 +553,47 @@ export const addPropertyDocument = async (req, res) => {
             ? `${name} added. The listing goes back for verification.`
             : `${name} added. It goes to the verification team.`,
         data: { property: detailedProperty(property) },
+    });
+};
+/**
+ * Re-confirm that a listing is still available, which lifts it back up the newest sort.
+ *
+ * It writes refreshedAt and nothing else. Default ranking is earned through verification
+ * and record, so a refresh that moved that would be paid placement wearing another hat.
+ * Recency is the one sort where "still true today" is the thing actually being sorted on,
+ * which is the only reason a refresh belongs in it.
+ *
+ * The allowance belongs to the account rather than to each listing, so the realtor
+ * chooses which home to put back in front of buyers.
+ */
+export const refreshMyProperty = async (req, res) => {
+    const { id } = propertyIdSchema.parse(req.params);
+    const user = req.user;
+    const property = await findOwned(id, user._id);
+    if (!ACTIVE_LISTING_STATUSES.includes(property.listingStatus))
+        throw new AppError("That listing is closed, so there is nothing to re-confirm.", 400);
+    const subscription = await resolveSubscription(user._id);
+    const allowed = entitlements(subscription).refreshes;
+    const left = allowed - subscription.refreshesUsed;
+    if (left <= 0)
+        throw new AppError(allowed === 0
+            ? "Listing refreshes come with a paid plan."
+            : "You have used every refresh on your plan this month.", 403);
+    const now = new Date();
+    property.refreshedAt = now;
+    await property.save({ validateModifiedOnly: true });
+    // The window opens on the first refresh spent in it, and the service closes it a
+    // month later. An untouched allowance has no window and needs none.
+    subscription.refreshesUsed += 1;
+    subscription.refreshPeriodStart = subscription.refreshPeriodStart ?? now;
+    await subscription.save({ validateModifiedOnly: true });
+    res.status(200).json({
+        status: "success",
+        message: "Listing re-confirmed. It is back at the top of the newest results.",
+        data: {
+            property: detailedProperty(property),
+            refreshesLeft: left - 1,
+        },
     });
 };
 export const deleteMyProperty = async (req, res) => {

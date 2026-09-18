@@ -16,6 +16,18 @@ export const LISTING_STATUSES = [
     "rented",
     "leased",
 ];
+/**
+ * The statuses that occupy a slot against the realtor plan. A listing that has been
+ * sold, rented or leased is a record of a deal, not an advert competing for attention,
+ * so it stops counting. Verification state is deliberately not part of this: a pending
+ * listing is exactly the one sitting in the review queue the subscription pays for.
+ */
+export const ACTIVE_LISTING_STATUSES = [
+    "sale",
+    "rent",
+    "lease",
+    "shortlet",
+];
 export const VERIFICATION_STATUSES = [
     "pending",
     "verified",
@@ -221,6 +233,10 @@ const propertySchema = new Schema({
         },
     },
     views: count(),
+    hiddenByPlan: { type: Boolean, default: false },
+    // Defaulted to now so it equals createdAt on a new listing, which lets the newest
+    // sort key on it alone rather than coalescing two fields on every read.
+    refreshedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 // The two access paths: the marketplace browse, and a realtor's own listings.
 propertySchema.index({ "verification.status": 1, listingStatus: 1, createdAt: -1 });

@@ -1,12 +1,13 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, listRealtors, listUsers, reviewListing, reviewRealtorAddress, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, getAdminSession, getUser, getListing, listListings, listRealtors, listUsers, reviewListing, reviewRealtorAddress, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
 import { reviewAddressSchema } from "../validators/agency.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
+import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 const tooManyAttempts = (_req, _res, next) => next(new AppError("Too many attempts. Please try again later.", 429));
 const adminLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -27,6 +28,9 @@ router.get("/users/:id", protect, restrictTo("admin"), getUser);
 // admin cannot reach any route on it.
 router.patch("/listings/:id/verification", protect, restrictTo("admin"), validate(reviewListingSchema), reviewListing);
 router.patch("/users/:id/status", protect, restrictTo("admin"), validate(userStatusSchema), reviewRealtorAddress, updateUserStatus);
+// Granting a plan lives here rather than on the subscription router, which answers to
+// realtors only. Same reason the listing verdict sits on this one.
+router.patch("/realtors/:id/subscription", protect, restrictTo("admin"), validate(setSubscriptionSchema), setRealtorSubscription);
 router.patch("/realtors/:id/address", protect, restrictTo("admin"), validate(reviewAddressSchema), reviewRealtorAddress);
 export default router;
 //# sourceMappingURL=admin.route.js.map

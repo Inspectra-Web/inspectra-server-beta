@@ -4,6 +4,7 @@ import Profile from "../models/profile.model.js";
 import Property, { listingCard, } from "../models/property.model.js";
 import User, { personCard } from "../models/user.model.js";
 import { sendInquiryReceived, sendInquiryReplied, } from "../services/email.service.js";
+import { entitlements, resolveSubscription, } from "../services/subscription.service.js";
 import { inquiryIdSchema, listInquiriesSchema, } from "../validators/inquiry.validator.js";
 const other = (side) => (side === "seeker" ? "realtor" : "seeker");
 const SORTS = {
@@ -321,6 +322,14 @@ export const addInquiryMessage = async (req, res) => {
     const fromSeeker = inquiry.seeker.equals(user._id);
     if (!fromSeeker && !inquiry.realtor.equals(user._id))
         throw new AppError("This conversation is not yours.", 403);
+    // Answering is the line between free and paid. Starter still sees that a lead came
+    // in, which is the upgrade prompt, and the thread is held rather than lost: nothing
+    // here deletes a message, so renewing hands the whole conversation back.
+    if (!fromSeeker) {
+        const subscription = await resolveSubscription(user._id);
+        if (!entitlements(subscription).leadReply)
+            throw new AppError("Replying to buyers needs a paid plan. Your leads are held until you upgrade.", 403);
+    }
     const now = new Date();
     inquiry.messages.push({ sender: user._id, body: message, createdAt: now });
     inquiry.lastMessageAt = now;

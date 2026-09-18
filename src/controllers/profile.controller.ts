@@ -10,6 +10,10 @@ import {
   ensureProfile,
   listingEligibility,
 } from "../services/profile.service.js";
+import {
+  listingAllowance,
+  resolveSubscription,
+} from "../services/subscription.service.js";
 import { destroyAvatar, uploadAvatar } from "../services/upload.service.js";
 import {
   REALTOR_FIELDS,
@@ -25,6 +29,24 @@ const forbiddenFor = (role: string) => {
 };
 
 /**
+ * What stands between this realtor and their next listing: the profile and identity
+ * gate, plus how much of the plan's allowance is already spoken for. Both travel
+ * together because the composer asks one question, "can I list now", and an answer
+ * split across two endpoints is an answer the gate can render half of.
+ */
+const realtorListing = async (user: UserDoc, profile: ProfileDoc) => {
+  const [identity, subscription] = await Promise.all([
+    Identity.findOne({ user: user._id }),
+    resolveSubscription(user._id),
+  ]);
+
+  return {
+    ...listingEligibility(user, profile, identity),
+    allowance: await listingAllowance(user._id, subscription),
+  };
+};
+
+/**
  * The account envelope. Only a realtor can list, so only a realtor is told whether
  * they may yet, and the console reads that rather than re-deriving the rule from the
  * fields it happens to render. The update emits it too: filling the profile in is the
@@ -33,10 +55,7 @@ const forbiddenFor = (role: string) => {
 const accountPayload = async (user: UserDoc, profile: ProfileDoc) => ({
   user: publicUser(user),
   profile: publicProfile(profile),
-  listing:
-    user.role === "realtor"
-      ? listingEligibility(user, profile, await Identity.findOne({ user: user._id }))
-      : undefined,
+  listing: user.role === "realtor" ? await realtorListing(user, profile) : undefined,
 });
 
 export const getMyProfile = async (req: Request, res: Response): Promise<void> => {

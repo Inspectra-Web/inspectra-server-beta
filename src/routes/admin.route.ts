@@ -11,6 +11,7 @@ import {
   listUsers,
   reviewListing,
   reviewRealtorAddress,
+  setRealtorSubscription,
   updateUserStatus,
 } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
@@ -19,6 +20,7 @@ import validate from "../middlewares/validate.middleware.js";
 import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
 import { reviewAddressSchema } from "../validators/agency.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
+import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 
 const tooManyAttempts: RequestHandler = (_req, _res, next) =>
   next(new AppError("Too many attempts. Please try again later.", 429));
@@ -64,6 +66,16 @@ router.patch(
   validate(userStatusSchema),
   reviewRealtorAddress,
   updateUserStatus,
+);
+
+// Granting a plan lives here rather than on the subscription router, which answers to
+// realtors only. Same reason the listing verdict sits on this one.
+router.patch(
+  "/realtors/:id/subscription",
+  protect,
+  restrictTo("admin"),
+  validate(setSubscriptionSchema),
+  setRealtorSubscription,
 );
 
 router.patch(

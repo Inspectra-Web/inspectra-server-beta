@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addPropertyDocument, addPropertyPhotos, createProperty, deleteMyProperty, getMyProperty, getProperty, getPropertyDocument, listMyProperties, listProperties, updateMyProperty, } from "../controllers/property.controller.js";
+import { addPropertyDocument, addPropertyPhotos, createProperty, deleteMyProperty, getMyProperty, getProperty, getPropertyDocument, listMyProperties, refreshMyProperty, listProperties, updateMyProperty, } from "../controllers/property.controller.js";
 import { optionalAuth, protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { documentUpload, photoUpload } from "../services/upload.service.js";
@@ -30,6 +30,8 @@ router.get("/me/:id", getMyProperty);
 router.post("/", validate(createPropertySchema), createProperty);
 router.patch("/:id", validate(updatePropertySchema), updateMyProperty);
 router.delete("/:id", deleteMyProperty);
+// No body: re-confirming a listing says nothing except that it is still true today.
+router.post("/:id/refresh", refreshMyProperty);
 // Files, which is why these are separate from the JSON body above.
 router.post("/:id/photos", photoUpload.array("photos", 20), addPropertyPhotos);
 router.post("/:id/documents", documentUpload.single("document"), validate(addDocumentSchema), addPropertyDocument);

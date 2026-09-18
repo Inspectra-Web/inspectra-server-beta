@@ -9,6 +9,7 @@ import {
   getProperty,
   getPropertyDocument,
   listMyProperties,
+  refreshMyProperty,
   listProperties,
   updateMyProperty,
 } from "../controllers/property.controller.js";
@@ -56,6 +57,9 @@ router.post("/", validate(createPropertySchema), createProperty);
 
 router.patch("/:id", validate(updatePropertySchema), updateMyProperty);
 router.delete("/:id", deleteMyProperty);
+
+// No body: re-confirming a listing says nothing except that it is still true today.
+router.post("/:id/refresh", refreshMyProperty);
 
 // Files, which is why these are separate from the JSON body above.
 router.post("/:id/photos", photoUpload.array("photos", 20), addPropertyPhotos);

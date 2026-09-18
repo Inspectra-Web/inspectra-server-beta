@@ -3,8 +3,10 @@ import Agency, { publicAgency } from "../models/agency.model.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
 import Property, { detailedProperty, } from "../models/property.model.js";
+import { PLANS, isPaid, publicSubscription } from "../models/subscription.model.js";
 import User, { publicUser } from "../models/user.model.js";
 import { sendListingReviewed } from "../services/email.service.js";
+import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
 import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, userIdSchema, } from "../validators/admin.validator.js";
 export const adminLogin = async (req, res) => {
@@ -527,6 +529,53 @@ export const reviewListing = async (req, res) => {
         status: "success",
         message,
         data: { property: detailedProperty(property) },
+    });
+};
+/**
+ * Put a realtor on a plan.
+ *
+ * This is how a paid tier is granted for now: a realtor pays by transfer, an admin
+ * confirms it against the bank and records the reference in the note. It is the honest
+ * shape of the thing until there is a gateway, and it is what makes the whole cap
+ * testable without one.
+ *
+ * The period is derived from the cadence rather than taken from the request, and
+ * Starter carries none at all: a free plan has nothing to renew and nothing to lapse
+ * from, so leaving a stale end date on it would start a grace clock that means nothing.
+ */
+export const setRealtorSubscription = async (req, res) => {
+    const { id } = userIdSchema.parse(req.params);
+    const { tier, cadence, note } = req.body;
+    const user = await User.findById(id);
+    if (!user)
+        throw new AppError("No user with that id.", 404);
+    if (user.role !== "realtor")
+        throw new AppError("That account is not a realtor.", 400);
+    const subscription = await resolveSubscription(user._id);
+    const period = isPaid(tier) ? periodFor(cadence) : undefined;
+    subscription.tier = tier;
+    subscription.cadence = cadence;
+    subscription.status = "active";
+    subscription.note = note ?? "";
+    subscription.startedAt = subscription.startedAt ?? new Date();
+    subscription.currentPeriodStart = period?.currentPeriodStart;
+    subscription.currentPeriodEnd = period?.currentPeriodEnd;
+    // Clearing the grace clock is the whole of reinstatement: a renewed account is
+    // active from now, not part way through the window its lapse opened.
+    subscription.graceEndsAt = undefined;
+    await subscription.save({ validateModifiedOnly: true });
+    // Both directions: an upgrade brings back everything a lapse hid, and a manual move
+    // down puts the overflow away rather than leaving it public for free.
+    await syncHiddenListings(user._id, subscription);
+    const allowance = await listingAllowance(user._id, subscription);
+    res.status(200).json({
+        status: "success",
+        message: `${user.fullname} is on the ${PLANS[tier].name} plan.`,
+        data: {
+            subscription: publicSubscription(subscription),
+            plan: entitlements(subscription),
+            allowance,
+        },
     });
 };
 //# sourceMappingURL=admin.controller.js.map

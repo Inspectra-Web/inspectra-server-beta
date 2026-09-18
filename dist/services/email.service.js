@@ -213,5 +213,33 @@ export const sendInspectionCancelled = (to, inspection, by) => notify(inspection
         `Open it:\n${by === "seeker" ? realtorLink(inspection) : seekerLink(inspection)}`,
     ].join("\n\n"),
 }));
+const naira = new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0,
+});
+/** Lagos, for the same reason a viewing time is: the reader is here. */
+const until = (date) => new Intl.DateTimeFormat("en-NG", {
+    dateStyle: "full",
+    timeZone: "Africa/Lagos",
+}).format(date);
+/**
+ * To the realtor, once money has actually cleared.
+ *
+ * A notification rather than a transactional send: by the time this fires the payment
+ * is banked and the plan is already active, so a Resend outage must never turn a
+ * successful charge into a failed request.
+ */
+export const sendPaymentReceipt = (to, payment) => notify(payment.reference, () => sendEmail({
+    to,
+    subject: `Receipt for your ${payment.plan} plan`,
+    body: [
+        "Your payment went through. Thank you.",
+        `${payment.plan} plan\n${naira.format(payment.amount)} paid by ${payment.channel}`,
+        `Your plan runs until ${until(payment.periodEnd)}.`,
+        `Reference:\n${payment.reference}`,
+        `Your subscription:\n${envConfig.CLIENT_URL}/realtor/subscription`,
+    ].join("\n\n"),
+}));
 export default sendEmail;
 //# sourceMappingURL=email.service.js.map
