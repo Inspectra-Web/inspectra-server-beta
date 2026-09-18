@@ -5,6 +5,7 @@ import { CADENCES, TIERS, isPaid } from "../models/subscription.model.js";
 
 const PAGE_SIZE = 12;
 const PAGE_SIZE_MAX = 48;
+const SEARCH_MAX = 80;
 
 // Starter costs nothing, so there is nothing to send anyone to a checkout for.
 const PAID_TIERS = TIERS.filter(isPaid);
@@ -63,3 +64,21 @@ export const listPaymentsSchema = z.object({
 });
 
 export type ListPaymentsQuery = z.infer<typeof listPaymentsSchema>;
+
+/**
+ * The platform ledger. Same shape as the realtor's own list plus a search, because an
+ * admin arrives at this page looking for one realtor or one reference, not browsing.
+ */
+export const listAdminPaymentsSchema = z.object({
+  q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+  status: z.enum(STATUS_FILTERS).default("all"),
+  page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+    .default(PAGE_SIZE),
+});
+
+export type ListAdminPaymentsQuery = z.infer<typeof listAdminPaymentsSchema>;

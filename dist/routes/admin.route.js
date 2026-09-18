@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, listRealtors, listUsers, reviewListing, reviewRealtorAddress, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, getAdminSession, getUser, getListing, listListings, listPayments, listRealtors, listUsers, reviewListing, reviewRealtorAddress, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -22,6 +22,7 @@ router.get("/session", protect, restrictTo("admin"), getAdminSession);
 router.get("/users", protect, restrictTo("admin"), listUsers);
 router.get("/realtors", protect, restrictTo("admin"), listRealtors);
 router.get("/listings", protect, restrictTo("admin"), listListings);
+router.get("/payments", protect, restrictTo("admin"), listPayments);
 router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
 // The review lives here, not on the property router: that one is realtor-only, so an

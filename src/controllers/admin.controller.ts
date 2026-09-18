@@ -11,7 +11,14 @@ import Property, {
   type ListingStatus,
   type VerificationStatus,
 } from "../models/property.model.js";
-import { PLANS, isPaid, publicSubscription } from "../models/subscription.model.js";
+import Payment, { type PaymentStatus } from "../models/payment.model.js";
+import Subscription, {
+  PLANS,
+  isPaid,
+  publicSubscription,
+  type Cadence,
+  type Tier,
+} from "../models/subscription.model.js";
 import User, { publicUser, type IUser } from "../models/user.model.js";
 import { sendListingReviewed } from "../services/email.service.js";
 import {
@@ -32,6 +39,9 @@ import {
   type UserStatusInput,
 } from "../validators/admin.validator.js";
 import type { LoginInput } from "../validators/auth.validator.js";
+import {
+  listAdminPaymentsSchema,
+} from "../validators/payment.validator.js";
 import type { SetSubscriptionInput } from "../validators/subscription.validator.js";
 
 export const adminLogin = async (req: Request, res: Response): Promise<void> => {
@@ -794,6 +804,196 @@ export const setRealtorSubscription = async (
       subscription: publicSubscription(subscription),
       plan: entitlements(subscription),
       allowance,
+    },
+  });
+};
+
+/* ------------------------------------------------------------------ *
+ * The platform payment ledger
+ * ------------------------------------------------------------------ */
+
+interface LedgerRow {
+  _id: Types.ObjectId;
+  reference: string;
+  tier?: Tier;
+  cadence?: Cadence;
+  amount: number;
+  status: PaymentStatus;
+  channel: string;
+  cardLast4: string;
+  paidAt?: Date;
+  periodEnd?: Date;
+  createdAt: Date;
+  realtorId: Types.ObjectId;
+  realtorName: string;
+  realtorEmail: string;
+  realtorAvatar: string;
+}
+
+interface LedgerPage {
+  rows: LedgerRow[];
+  total: { count: number }[];
+  statuses: { _id: PaymentStatus; count: number }[];
+  collected: { _id: null; total: number }[];
+  thisMonth: { _id: null; total: number }[];
+}
+
+const ledgerRow = (row: LedgerRow) => ({
+  id: row._id,
+  reference: row.reference,
+  tier: row.tier,
+  cadence: row.cadence,
+  amount: row.amount,
+  status: row.status,
+  channel: row.channel,
+  cardLast4: row.cardLast4,
+  paidAt: row.paidAt,
+  periodEnd: row.periodEnd,
+  createdAt: row.createdAt,
+  realtor: {
+    id: row.realtorId,
+    fullname: row.realtorName,
+    email: row.realtorEmail,
+    avatar: row.realtorAvatar,
+  },
+});
+
+/**
+ * Every payment on the platform, and what they add up to.
+ *
+ * There is deliberately no MRR here. Nothing auto-renews, so a monthly recurring figure
+ * would be a projection dressed as a measurement. What is reported instead is money that
+ * actually arrived, plus how many plans are live and what those are worth a month, which
+ * are three things that are true.
+ *
+ * The status match narrows `rows` and `total` only. The `statuses` branch counts the
+ * whole set, and the two money branches carry their own fixed `paid` match, which is a
+ * definition of revenue rather than a filter anyone chose.
+ */
+export const listPayments = async (req: Request, res: Response): Promise<void> => {
+  const { q, status, page, limit } = listAdminPaymentsSchema.parse(req.query);
+
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all" ? [] : [{ $match: { status } }];
+
+  const pipeline: PipelineStage[] = [
+    { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
+    { $unwind: "$realtor" },
+    {
+      $addFields: {
+        realtorId: "$realtor._id",
+        realtorName: "$realtor.fullname",
+        realtorEmail: "$realtor.email",
+        realtorAvatar: { $ifNull: ["$realtor.avatar", ""] },
+      },
+    },
+  ];
+
+  if (q) {
+    const pattern = new RegExp(escapeRegex(q), "i");
+    pipeline.push({
+      $match: {
+        $or: [{ realtorName: pattern }, { realtorEmail: pattern }, { reference: pattern }],
+      },
+    });
+  }
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...statusMatch,
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+      ],
+      total: [...statusMatch, { $count: "count" }],
+      statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+      collected: [
+        { $match: { status: "paid" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ],
+      thisMonth: [
+        { $match: { status: "paid", paidAt: { $gte: monthStart } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ],
+    },
+  });
+
+  const [result] = await Payment.aggregate<LedgerPage>(pipeline);
+
+  const rows = result?.rows ?? [];
+  const total = result?.total[0]?.count ?? 0;
+
+  const counts: Record<PaymentStatus | "all", number> = {
+    all: 0,
+    pending: 0,
+    paid: 0,
+    failed: 0,
+  };
+
+  for (const row of result?.statuses ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
+  // Live plans come off the subscriptions themselves, not the ledger: a plan is live
+  // because its period has not run out, which no payment row knows on its own.
+  //
+  // Keyed on currentPeriodEnd rather than on status, and that distinction matters
+  // twice. A cancelled plan still runs to the end of the period it paid for, so its
+  // holder does hold a paid tier. And because the lifecycle advances lazily, a
+  // subscription nobody has read since it expired still says "professional" in the
+  // database: only the date is true without a read.
+  const live = await Subscription.aggregate<{
+    _id: Tier;
+    count: number;
+    ending: number;
+  }>([
+    { $match: { tier: { $ne: "starter" }, currentPeriodEnd: { $gt: new Date() } } },
+    {
+      $group: {
+        _id: "$tier",
+        count: { $sum: 1 },
+        // Cancelled, so live now and gone at the period end.
+        ending: {
+          $sum: { $cond: [{ $eq: ["$status", "canceled"] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  const plans = live.map((row) => ({
+    tier: row._id,
+    name: PLANS[row._id].name,
+    count: row.count,
+    ending: row.ending,
+    monthly: PLANS[row._id].monthly,
+  }));
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      payments: rows.map(ledgerRow),
+      counts,
+      revenue: {
+        collected: result?.collected[0]?.total ?? 0,
+        thisMonth: result?.thisMonth[0]?.total ?? 0,
+        activePlans: plans.reduce((sum, plan) => sum + plan.count, 0),
+        // Of those, the ones that have been cancelled and will not come back.
+        endingPlans: plans.reduce((sum, plan) => sum + plan.ending, 0),
+        // What the live plans are worth a month. Not a forecast: none of them renew
+        // on their own, so this says what is currently held, not what will arrive.
+        monthlyValue: plans.reduce((sum, plan) => sum + plan.count * plan.monthly, 0),
+        plans,
+      },
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
     },
   });
 };

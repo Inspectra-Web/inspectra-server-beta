@@ -7,6 +7,7 @@ import {
   getUser,
   getListing,
   listListings,
+  listPayments,
   listRealtors,
   listUsers,
   reviewListing,
@@ -44,6 +45,8 @@ router.get("/users", protect, restrictTo("admin"), listUsers);
 router.get("/realtors", protect, restrictTo("admin"), listRealtors);
 
 router.get("/listings", protect, restrictTo("admin"), listListings);
+
+router.get("/payments", protect, restrictTo("admin"), listPayments);
 
 router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 
