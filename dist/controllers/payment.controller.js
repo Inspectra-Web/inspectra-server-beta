@@ -12,6 +12,9 @@ const flwHeaders = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${envConfig.FLW_SECRET_KEY}`,
 };
+// CLIENT_URL is written with a trailing slash in some environments, and appending a path
+// to it would give a double slash the router never matches.
+const clientOrigin = envConfig.CLIENT_URL.replace(/\/+$/, "");
 /** Opens a hosted checkout and hands back the link to send the realtor to. */
 const createCharge = async (payment, user, description) => {
     const response = await fetch(`${envConfig.FLW_BASE_URL}/payments`, {
@@ -23,13 +26,19 @@ const createCharge = async (payment, user, description) => {
             currency: payment.currency,
             // The client origin, not the API. The session cookie is only first-party there,
             // so a return to the API would land the realtor signed out.
-            redirect_url: `${envConfig.CLIENT_URL}/realtor/subscription/callback`,
+            redirect_url: `${clientOrigin}/realtor/subscription/callback`,
             customer: {
                 email: user.email,
                 name: user.fullname,
                 phonenumber: user.phone ?? "",
             },
-            customizations: { title: "INSPECTRA", description },
+            // Flutterwave fetches the logo itself, so it has to be a public URL. The symbol,
+            // not the wordmark: the checkout sets it beside the title in a small square.
+            customizations: {
+                title: "INSPECTRA",
+                description,
+                logo: `${clientOrigin}/inspectra-symbol.png`,
+            },
             // No payment_plan: that would pin the method to card, and bank transfer and USSD
             // carry real volume here. Renewal is a fresh charge, not an auto-debit.
             //
