@@ -19,6 +19,7 @@ const envConfig = {
   DOJAH_BASE_URL: process.env.DOJAH_BASE_URL!,
   DOJAH_APP_ID: process.env.DOJAH_APP_ID!,
   DOJAH_SECRET_KEY: process.env.DOJAH_SECRET_KEY!,
+  IDENTITY_ENCRYPTION_KEY: process.env.IDENTITY_ENCRYPTION_KEY!,
   FLW_BASE_URL: process.env.FLW_BASE_URL!,
   FLW_SECRET_KEY: process.env.FLW_SECRET_KEY!,
   FLW_WEBHOOK_HASH: process.env.FLW_WEBHOOK_HASH!,

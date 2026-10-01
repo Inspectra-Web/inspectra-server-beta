@@ -53,6 +53,16 @@ export const updateMyProfile = async (req, res) => {
     if (offending.length)
         throw new AppError(`These fields are not available on your account: ${offending.join(", ")}`, 403);
     const profile = await ensureProfile(user);
+    const nameParts = [
+        "firstName",
+        "middleName",
+        "lastName",
+    ];
+    const renamed = nameParts.some((part) => body[part] !== undefined && body[part].trim() !== profile[part].trim());
+    // The NIN step matched these three names, so from then on they cannot change.
+    if (renamed &&
+        (await Identity.exists({ user: user._id, $or: [{ ninVerified: true }, { verified: true }] })))
+        throw new AppError("Your name is locked to your verified NIN.", 409);
     const { phone, ...profileFields } = body;
     const updated = await Profile.findOneAndUpdate({ user: user._id }, profileFields, {
         returnDocument: "after",

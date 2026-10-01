@@ -1,20 +1,22 @@
 import { Router, type RequestHandler } from "express";
 import rateLimit from "express-rate-limit";
 
-import { getMyIdentity, verifyMyIdentity } from "../controllers/identity.controller.js";
+import { getMyIdentity, verifyMyBvn, verifyMyNin } from "../controllers/identity.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { avatarUpload } from "../services/upload.service.js";
-import { verifyIdentitySchema } from "../validators/identity.validator.js";
+import { verifyBvnSchema, verifyNinSchema } from "../validators/identity.validator.js";
 
 const tooManyAttempts: RequestHandler = (_req, _res, next) =>
   next(new AppError("Too many attempts. Please try again later.", 429));
 
-// Every attempt is a billed call to the provider, so the budget is tight.
+// A spend guard only: MAX_ATTEMPTS on the model is the real cap. Keyed by realtor, so a
+// shared office address cannot lock out everyone behind it.
 const verifyLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  limit: 5,
+  limit: 10,
+  keyGenerator: (req) => req.user!._id.toString(),
   standardHeaders: "draft-7",
   legacyHeaders: false,
   handler: tooManyAttempts,
@@ -27,11 +29,13 @@ router.use(protect, restrictTo("realtor"));
 router.get("/me", getMyIdentity);
 
 router.post(
-  "/me",
+  "/me/nin",
   verifyLimiter,
   avatarUpload.single("selfie"),
-  validate(verifyIdentitySchema),
-  verifyMyIdentity,
+  validate(verifyNinSchema),
+  verifyMyNin,
 );
+
+router.post("/me/bvn", verifyLimiter, validate(verifyBvnSchema), verifyMyBvn);
 
 export default router;
