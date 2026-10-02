@@ -17,8 +17,6 @@ const publicRealtor = (row) => ({
     specialization: row.specialization,
     certified: row.certified,
     identityVerified: row.identityVerified,
-    agencyVerified: row.agencyVerified,
-    addressVerified: row.addressVerified,
     createdAt: row.createdAt,
 });
 /**
@@ -36,10 +34,6 @@ const vettedStages = [
         $lookup: { from: "identities", localField: "_id", foreignField: "user", as: "identity" },
     },
     { $unwind: { path: "$identity", preserveNullAndEmptyArrays: true } },
-    {
-        $lookup: { from: "agencies", localField: "_id", foreignField: "user", as: "agency" },
-    },
-    { $unwind: { path: "$agency", preserveNullAndEmptyArrays: true } },
     {
         $addFields: {
             city: { $ifNull: ["$profile.city", ""] },
@@ -60,11 +54,9 @@ const vettedStages = [
             socials: { $ifNull: ["$profile.socials", {}] },
             certified: { $ifNull: ["$profile.certified", false] },
             identityVerified: { $ifNull: ["$identity.verified", false] },
-            agencyVerified: { $ifNull: ["$agency.cac.verified", false] },
-            addressVerified: { $eq: [{ $ifNull: ["$agency.address.status", ""] }, "verified"] },
         },
     },
-    // The gate: a realtor earns a public profile by clearing either check.
+    // The gate: a realtor earns a public profile by being identity-verified or certified.
     { $match: { $or: [{ certified: true }, { identityVerified: true }] } },
 ];
 const SORTS = {
@@ -72,8 +64,6 @@ const SORTS = {
     recommended: {
         certified: -1,
         identityVerified: -1,
-        agencyVerified: -1,
-        addressVerified: -1,
         createdAt: -1,
         _id: -1,
     },
@@ -120,8 +110,6 @@ export const listRealtors = async (req, res) => {
                         specialization: 1,
                         certified: 1,
                         identityVerified: 1,
-                        agencyVerified: 1,
-                        addressVerified: 1,
                         createdAt: 1,
                     },
                 },
@@ -170,8 +158,6 @@ export const getRealtor = async (req, res) => {
                 socials: 1,
                 certified: 1,
                 identityVerified: 1,
-                agencyVerified: 1,
-                addressVerified: 1,
                 createdAt: 1,
             },
         },

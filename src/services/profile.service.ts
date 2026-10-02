@@ -91,13 +91,31 @@ export const listingEligibility = (
   profile: ProfileDoc,
   identity: IdentityDoc | null,
 ): ListingEligibility => {
-  const missing: string[] = [];
+  const missing = profileGaps(user, profile);
 
-  if (!user.phone?.trim()) missing.push("a phone number");
-  if (!profile.city.trim()) missing.push("your city");
-  if (!profile.state.trim()) missing.push("your state");
-  if (!profile.bio.trim()) missing.push("a short bio");
   if (!identity?.verified) missing.push("a verified identity");
 
   return { ready: missing.length === 0, missing };
 };
+
+/**
+ * What a realtor's profile still lacks. It gates identity verification as well as
+ * listing: the check matches the NIN against these names, and a verified badge on a
+ * blank profile tells a buyer nothing. One list, so the two gates cannot drift.
+ */
+export const profileGaps = (user: UserDoc, profile: ProfileDoc): string[] => {
+  const missing: string[] = [];
+
+  if (!profile.firstName.trim()) missing.push("your first name");
+  if (!profile.lastName.trim()) missing.push("your last name");
+  if (!user.phone?.trim()) missing.push("a phone number");
+  if (!profile.city.trim()) missing.push("your city");
+  if (!profile.state.trim()) missing.push("your state");
+  if (!profile.bio.trim()) missing.push("a short bio");
+
+  return missing;
+};
+
+/** "a, b and c": the gaps as one readable clause. */
+export const listOf = (items: string[]): string =>
+  items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;

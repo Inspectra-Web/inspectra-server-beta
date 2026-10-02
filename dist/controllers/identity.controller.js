@@ -3,7 +3,7 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { MAX_ATTEMPTS, publicIdentity } from "../models/identity.model.js";
 import { encrypt, fingerprint } from "../services/crypto.service.js";
-import { composeName, ensureProfile, words } from "../services/profile.service.js";
+import { composeName, ensureProfile, listOf, profileGaps, words, } from "../services/profile.service.js";
 import { uploadAvatar } from "../services/upload.service.js";
 const UNREACHABLE = "We could not reach the verification service. Try again.";
 const dojah = async (path, init) => {
@@ -77,9 +77,28 @@ const nameOf = (person) => ({
 const attemptsNote = (left) => left === 0
     ? "That was your last attempt. Contact support to review your identity."
     : `You have ${left} attempt${left === 1 ? "" : "s"} left.`;
+/** Identity verification only opens on a complete profile. Checked before any attempt is claimed. */
+const requireCompleteProfile = async (user) => {
+    const profile = await ensureProfile(user);
+    const missing = profileGaps(user, profile);
+    if (missing.length)
+        throw new AppError(`Complete your profile before verifying your identity: add ${listOf(missing)}.`, 403);
+    return profile;
+};
 export const getMyIdentity = async (req, res) => {
-    const identity = await Identity.findOneAndUpdate({ user: req.user._id }, {}, { upsert: true, returnDocument: "after", runValidators: true });
-    res.status(200).json({ status: "success", data: { identity: publicIdentity(identity) } });
+    const user = req.user;
+    const [identity, profile] = await Promise.all([
+        Identity.findOneAndUpdate({ user: user._id }, {}, { upsert: true, returnDocument: "after", runValidators: true }),
+        ensureProfile(user),
+    ]);
+    res.status(200).json({
+        status: "success",
+        data: {
+            identity: publicIdentity(identity),
+            // What stands between this realtor and starting the check, so the tab can say so.
+            profileMissing: profileGaps(user, profile),
+        },
+    });
 };
 const PARTS = ["first", "middle", "last"];
 const plural = (count, one, many) => (count > 1 ? many : one);
@@ -116,9 +135,7 @@ export const verifyMyNin = async (req, res) => {
     if (!req.file)
         throw new AppError("Add a selfie.", 400);
     const selfie = req.file.buffer;
-    const profile = await ensureProfile(user);
-    if (!profile.firstName.trim() || !profile.lastName.trim())
-        throw new AppError("Add your first and last name in your Profile before verifying.", 400);
+    const profile = await requireCompleteProfile(user);
     const existing = await startedIdentity(user._id);
     if (existing.verified)
         throw new AppError("Your identity is already verified.", 409);
@@ -172,6 +189,7 @@ export const verifyMyBvn = async (req, res) => {
         throw new AppError("Your identity is already verified.", 409);
     if (!existing.ninVerified)
         throw new AppError("Verify your NIN first.", 409);
+    await requireCompleteProfile(user);
     await withAttempt(user._id, async () => {
         // Dojah bills a BVN lookup even when the number is not found, so the free check goes first.
         const bvnHash = fingerprint(bvn);

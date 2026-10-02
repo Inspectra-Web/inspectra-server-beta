@@ -12,7 +12,6 @@ import {
   listRealtors,
   listUsers,
   reviewListing,
-  reviewRealtorAddress,
   setRealtorSubscription,
   updateUserStatus,
 } from "../controllers/admin.controller.js";
@@ -20,7 +19,6 @@ import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
-import { reviewAddressSchema } from "../validators/agency.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 
@@ -72,7 +70,6 @@ router.patch(
   protect,
   restrictTo("admin"),
   validate(userStatusSchema),
-  reviewRealtorAddress,
   updateUserStatus,
 );
 
@@ -84,14 +81,6 @@ router.patch(
   restrictTo("admin"),
   validate(setSubscriptionSchema),
   setRealtorSubscription,
-);
-
-router.patch(
-  "/realtors/:id/address",
-  protect,
-  restrictTo("admin"),
-  validate(reviewAddressSchema),
-  reviewRealtorAddress,
 );
 
 export default router;

@@ -60,7 +60,22 @@ export const ensureProfile = async (user) => {
  * another is a rule that drifts.
  */
 export const listingEligibility = (user, profile, identity) => {
+    const missing = profileGaps(user, profile);
+    if (!identity?.verified)
+        missing.push("a verified identity");
+    return { ready: missing.length === 0, missing };
+};
+/**
+ * What a realtor's profile still lacks. It gates identity verification as well as
+ * listing: the check matches the NIN against these names, and a verified badge on a
+ * blank profile tells a buyer nothing. One list, so the two gates cannot drift.
+ */
+export const profileGaps = (user, profile) => {
     const missing = [];
+    if (!profile.firstName.trim())
+        missing.push("your first name");
+    if (!profile.lastName.trim())
+        missing.push("your last name");
     if (!user.phone?.trim())
         missing.push("a phone number");
     if (!profile.city.trim())
@@ -69,8 +84,8 @@ export const listingEligibility = (user, profile, identity) => {
         missing.push("your state");
     if (!profile.bio.trim())
         missing.push("a short bio");
-    if (!identity?.verified)
-        missing.push("a verified identity");
-    return { ready: missing.length === 0, missing };
+    return missing;
 };
+/** "a, b and c": the gaps as one readable clause. */
+export const listOf = (items) => items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 //# sourceMappingURL=profile.service.js.map
