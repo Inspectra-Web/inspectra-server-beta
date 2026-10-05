@@ -47,11 +47,9 @@ const checkLiveness = async (selfie) => {
 const notFound = (label) => new AppError(`That ${label} could not be found.`, 404);
 // A missing number is a 404 on the NIN endpoint and a 400 on the BVN one.
 const lookupFailed = (response, label) => response.status === 404 || response.status === 400 ? notFound(label) : new AppError(UNREACHABLE, 502);
-const verifyNin = async (nin, selfie) => {
-    const response = await dojah("/api/v1/kyc/nin/verify", {
-        method: "POST",
-        body: JSON.stringify({ nin, selfie_image: selfie.toString("base64") }),
-    });
+// The basic lookup, no selfie: liveness is its own call, and the selfie variant bills more.
+const lookupNin = async (nin) => {
+    const response = await dojah(`/api/v1/kyc/nin?nin=${encodeURIComponent(nin)}`);
     if (!response.ok)
         throw lookupFailed(response, "NIN");
     const entity = await entityOf(response);
@@ -74,6 +72,35 @@ const nameOf = (person) => ({
     middle: normalise(person.middle_name),
     last: normalise(person.last_name),
 });
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+/** A record's date of birth as "YYYY-MM-DD", or "" when it is missing or unreadable. */
+const dayOf = (value) => {
+    const raw = value?.trim() ?? "";
+    // "1990-05-14", with or without a time after it.
+    const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    // "14-05-1990", "14/05/1990", "14-May-1990".
+    const dmy = raw.match(/^(\d{1,2})[-/](\d{1,2}|[a-z]{3,})[-/](\d{4})$/i);
+    const monthOf = (part) => /^\d+$/.test(part) ? part : String(MONTHS.indexOf(part.slice(0, 3).toLowerCase()) + 1);
+    const [year, month, day] = iso
+        ? [iso[1], iso[2], iso[3]]
+        : dmy
+            ? [dmy[3], monthOf(dmy[2]), dmy[1]]
+            : [];
+    if (!year || !month || !day || month === "0")
+        return "";
+    const date = new Date(Date.UTC(+year, +month - 1, +day));
+    // Rolled over means it was not a real day, such as 31 April.
+    if (date.getUTCMonth() !== +month - 1 || date.getUTCDate() !== +day)
+        return "";
+    return date.toISOString().slice(0, 10);
+};
+// A blank date is the provider's gap, not the realtor's mismatch: a 502 gives the attempt back.
+const recordDay = (person, label) => {
+    const day = dayOf(person.date_of_birth);
+    if (!day)
+        throw new AppError(`We could not read the date of birth on your ${label} record. Try again, or contact support.`, 502);
+    return day;
+};
 const attemptsNote = (left) => left === 0
     ? "That was your last attempt. Contact support to review your identity."
     : `You have ${left} attempt${left === 1 ? "" : "s"} left.`;
@@ -128,7 +155,7 @@ const withAttempt = async (userId, step) => {
         throw error;
     }
 };
-/** Step one: liveness, the NIN face match, and the profile's three names against the NIN. */
+/** Step one: the profile's names and date of birth against the NIN, then liveness on the selfie. */
 export const verifyMyNin = async (req, res) => {
     const { nin } = req.body;
     const user = req.user;
@@ -146,9 +173,7 @@ export const verifyMyNin = async (req, res) => {
         const ninHash = fingerprint(nin);
         if (await Identity.exists({ user: trusted({ $ne: user._id }), ninHash }))
             throw new AppError("This NIN is already verified on another account.", 409);
-        const record = await verifyNin(nin, selfie);
-        if (!record.selfie_verification?.match)
-            throw new AppError("Your face does not match the photo on your NIN.", 400);
+        const record = await lookupNin(nin);
         const fromNin = nameOf(record);
         const mine = {
             first: normalise(profile.firstName),
@@ -158,6 +183,9 @@ export const verifyMyNin = async (req, res) => {
         const mismatched = PARTS.filter((part) => mine[part] !== fromNin[part]);
         if (mismatched.length)
             throw new AppError(`Your ${mismatched.join(" and ")} ${plural(mismatched.length, "name", "names")} on your Profile ${plural(mismatched.length, "does", "do")} not match your NIN. Correct ${plural(mismatched.length, "it", "them")} in your Profile, then try again.`, 400);
+        const ninDay = recordDay(record, "NIN");
+        if (dayOf(profile.dateOfBirth?.toISOString()) !== ninDay)
+            throw new AppError("Your date of birth on your Profile does not match your NIN. Correct it in your Profile, then try again.", 400);
         await checkLiveness(selfie);
         const { url, publicId } = await uploadAvatar(selfie);
         await Identity.updateOne({ user: user._id }, {
@@ -165,7 +193,7 @@ export const verifyMyNin = async (req, res) => {
             middleName: profile.middleName.trim(),
             lastName: profile.lastName.trim(),
             legalName: composeName(profile),
-            dateOfBirth: record.date_of_birth ?? "",
+            dateOfBirth: ninDay,
             nin: encrypt(nin),
             ninHash,
             ninLast4: nin.slice(-4),
@@ -180,7 +208,7 @@ export const verifyMyNin = async (req, res) => {
         data: { identity: publicIdentity(identity) },
     });
 };
-/** Step two: the BVN's name against the names the NIN step already matched. */
+/** Step two: the BVN's name and date of birth against what the NIN step already matched. */
 export const verifyMyBvn = async (req, res) => {
     const { bvn } = req.body;
     const user = req.user;
@@ -189,13 +217,16 @@ export const verifyMyBvn = async (req, res) => {
         throw new AppError("Your identity is already verified.", 409);
     if (!existing.ninVerified)
         throw new AppError("Verify your NIN first.", 409);
-    await requireCompleteProfile(user);
+    const profile = await requireCompleteProfile(user);
+    // A NIN verified before the date was checked carries a raw or blank one; the profile's stands in.
+    const ninDay = dayOf(existing.dateOfBirth) || dayOf(profile.dateOfBirth?.toISOString());
     await withAttempt(user._id, async () => {
         // Dojah bills a BVN lookup even when the number is not found, so the free check goes first.
         const bvnHash = fingerprint(bvn);
         if (await Identity.exists({ user: trusted({ $ne: user._id }), bvnHash }))
             throw new AppError("This BVN is already verified on another account.", 409);
-        const fromBvn = nameOf(await lookupBvn(bvn));
+        const record = await lookupBvn(bvn);
+        const fromBvn = nameOf(record);
         const fromNin = {
             first: normalise(existing.firstName),
             middle: normalise(existing.middleName),
@@ -205,6 +236,8 @@ export const verifyMyBvn = async (req, res) => {
             fromNin.last !== fromBvn.last ||
             (fromNin.middle && fromBvn.middle && fromNin.middle !== fromBvn.middle))
             throw new AppError("The name on your BVN does not match the name on your NIN.", 400);
+        if (recordDay(record, "BVN") !== ninDay)
+            throw new AppError("The date of birth on your BVN does not match your NIN.", 400);
         await Identity.updateOne({ user: user._id }, {
             bvn: encrypt(bvn),
             bvnHash,

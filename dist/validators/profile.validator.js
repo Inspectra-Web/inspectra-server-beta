@@ -5,6 +5,18 @@ import { PROPERTY_CATEGORIES, PROPERTY_TYPES } from "../types/property.type.js";
 const TAGS_MAX = 20;
 const line = z.string("Required").trim();
 const phone = line.refine((value) => value === "" || value.length >= 7, "Enter a valid phone number");
+const MIN_AGE = 18;
+const MAX_AGE = 120;
+const yearsAgo = (years) => {
+    const today = new Date();
+    return new Date(Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate()));
+};
+const dateOfBirth = z.iso
+    .date("Enter your date of birth as YYYY-MM-DD")
+    // "YYYY-MM-DD" parses as UTC midnight, so the stored day is the day typed.
+    .transform((value) => new Date(value))
+    .refine((date) => date <= yearsAgo(MIN_AGE), `You must be at least ${MIN_AGE} years old`)
+    .refine((date) => date > yearsAgo(MAX_AGE), "Enter a valid date of birth");
 export const updateProfileSchema = z
     .strictObject({
     // Recomposed into User.fullname, so these two cannot be blanked.
@@ -14,6 +26,7 @@ export const updateProfileSchema = z
     // Uncapped, as on the model: the realtor writes their own trust copy.
     bio: line,
     gender: z.enum(GENDERS),
+    dateOfBirth,
     address: line,
     city: line,
     state: line,
@@ -47,6 +60,7 @@ export const updateProfileSchema = z
 // quietly leaving it ungated.
 /** Meaningless on a seeker account, and refused there. */
 export const REALTOR_FIELDS = [
+    "dateOfBirth",
     "agencyName",
     "agencyAddress",
     "region",

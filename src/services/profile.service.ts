@@ -99,14 +99,16 @@ export const listingEligibility = (
 
 /**
  * What a realtor's profile still lacks. It gates identity verification as well as
- * listing: the check matches the NIN against these names, and a verified badge on a
- * blank profile tells a buyer nothing. One list, so the two gates cannot drift.
+ * listing: the check matches the NIN against these names and date of birth, and a
+ * verified badge on a blank profile tells a buyer nothing. One list, so the two gates
+ * cannot drift.
  */
 export const profileGaps = (user: UserDoc, profile: ProfileDoc): string[] => {
   const missing: string[] = [];
 
   if (!profile.firstName.trim()) missing.push("your first name");
   if (!profile.lastName.trim()) missing.push("your last name");
+  if (!profile.dateOfBirth) missing.push("your date of birth");
   if (!user.phone?.trim()) missing.push("a phone number");
   if (!profile.city.trim()) missing.push("your city");
   if (!profile.state.trim()) missing.push("your state");

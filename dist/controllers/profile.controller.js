@@ -59,10 +59,14 @@ export const updateMyProfile = async (req, res) => {
         "lastName",
     ];
     const renamed = nameParts.some((part) => body[part] !== undefined && body[part].trim() !== profile[part].trim());
-    // The NIN step matched these three names, so from then on they cannot change.
-    if (renamed &&
+    // Setting it for the first time is not a change: profiles verified before it existed have none.
+    const redated = body.dateOfBirth !== undefined &&
+        profile.dateOfBirth !== undefined &&
+        body.dateOfBirth.getTime() !== profile.dateOfBirth.getTime();
+    // The NIN step matched these, so from then on they cannot change.
+    if ((renamed || redated) &&
         (await Identity.exists({ user: user._id, $or: [{ ninVerified: true }, { verified: true }] })))
-        throw new AppError("Your name is locked to your verified NIN.", 409);
+        throw new AppError(`Your ${renamed ? "name" : "date of birth"} is locked to your verified NIN.`, 409);
     const { phone, ...profileFields } = body;
     const updated = await Profile.findOneAndUpdate({ user: user._id }, profileFields, {
         returnDocument: "after",
