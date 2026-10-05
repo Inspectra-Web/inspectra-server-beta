@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import type { PipelineStage, Types } from "mongoose";
 
+import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
@@ -21,7 +22,7 @@ import Subscription, {
   type Tier,
 } from "../models/subscription.model.js";
 import User, { publicUser, type IUser } from "../models/user.model.js";
-import { sendListingReviewed } from "../services/email.service.js";
+import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
 import {
   entitlements,
   listingAllowance,
@@ -55,7 +56,10 @@ export const adminLogin = async (req: Request, res: Response): Promise<void> => 
     throw new AppError("Incorrect email or password.", 401);
 
   if (user.status === "suspended")
-    throw new AppError("This account has been suspended. Please contact support.", 403);
+    throw new AppError(
+      `This account has been suspended. Please contact ${envConfig.SUPPORT_EMAIL}.`,
+      403,
+    );
 
   if (!user.emailVerified)
     throw new AppError("Please verify your email address before logging in.", 403);
@@ -239,6 +243,8 @@ export const updateUserStatus = async (req: Request, res: Response): Promise<voi
 
   user.status = status;
   await user.save({ validateModifiedOnly: true });
+
+  sendAccountStatus(user.email, status, user.role);
 
   res.status(200).json({
     status: "success",

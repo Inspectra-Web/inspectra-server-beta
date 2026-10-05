@@ -5,6 +5,7 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { MAX_ATTEMPTS, publicIdentity } from "../models/identity.model.js";
 import { encrypt, fingerprint } from "../services/crypto.service.js";
+import { sendIdentityVerified } from "../services/email.service.js";
 import {
   composeName,
   ensureProfile,
@@ -152,7 +153,7 @@ const recordDay = (person: DojahPerson, label: string): string => {
 
   if (!day)
     throw new AppError(
-      `We could not read the date of birth on your ${label} record. Try again, or contact support.`,
+      `We could not read the date of birth on your ${label} record. Try again, or contact ${envConfig.SUPPORT_EMAIL}.`,
       502,
     );
 
@@ -161,7 +162,7 @@ const recordDay = (person: DojahPerson, label: string): string => {
 
 const attemptsNote = (left: number): string =>
   left === 0
-    ? "That was your last attempt. Contact support to review your identity."
+    ? `That was your last attempt. Contact ${envConfig.SUPPORT_EMAIL} to review your identity.`
     : `You have ${left} attempt${left === 1 ? "" : "s"} left.`;
 
 /** Identity verification only opens on a complete profile. Checked before any attempt is claimed. */
@@ -224,7 +225,7 @@ const withAttempt = async <T>(userId: Types.ObjectId, step: () => Promise<T>): P
 
   if (!claimed)
     throw new AppError(
-      `You have used all ${MAX_ATTEMPTS} attempts. Contact support to review your identity.`,
+      `You have used all ${MAX_ATTEMPTS} attempts. Contact ${envConfig.SUPPORT_EMAIL} to review your identity.`,
       403,
     );
 
@@ -384,6 +385,8 @@ export const verifyMyBvn = async (req: Request, res: Response): Promise<void> =>
   });
 
   const identity = await startedIdentity(user._id);
+
+  sendIdentityVerified(user.email);
 
   res.status(200).json({
     status: "success",
