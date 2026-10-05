@@ -4,6 +4,7 @@ import {
   AVAILABILITY_STATUSES,
   CONTACT_MEANS,
   GENDERS,
+  REGIONS,
 } from "../models/profile.model.js";
 import { PROPERTY_CATEGORIES, PROPERTY_TYPES } from "../types/property.type.js";
 
@@ -34,13 +35,11 @@ export const updateProfileSchema = z
     // Lives on User, not the profile. The controller routes it there.
     phone,
     whatsapp: phone,
-    language: line,
 
-    jobTitle: line,
     agencyName: line,
     agencyAddress: line,
-    region: line,
-    experience: line,
+    // Empty clears it.
+    region: z.enum(REGIONS).or(z.literal("")),
     specialization: z
       .array(line.min(1, "A specialty cannot be blank"))
       .max(TAGS_MAX, `Pick at most ${TAGS_MAX} specialties`),
@@ -73,11 +72,9 @@ type ProfileField = keyof UpdateProfileInput;
 
 /** Meaningless on a seeker account, and refused there. */
 export const REALTOR_FIELDS: ProfileField[] = [
-  "jobTitle",
   "agencyName",
   "agencyAddress",
   "region",
-  "experience",
   "specialization",
   "availabilityStatus",
   "contactMeans",

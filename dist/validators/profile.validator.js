@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AVAILABILITY_STATUSES, CONTACT_MEANS, GENDERS, } from "../models/profile.model.js";
+import { AVAILABILITY_STATUSES, CONTACT_MEANS, GENDERS, REGIONS, } from "../models/profile.model.js";
 import { PROPERTY_CATEGORIES, PROPERTY_TYPES } from "../types/property.type.js";
 // Mirrors client/src/lib/accountSchema.ts so the two ends agree on the rules.
 const TAGS_MAX = 20;
@@ -21,12 +21,10 @@ export const updateProfileSchema = z
     // Lives on User, not the profile. The controller routes it there.
     phone,
     whatsapp: phone,
-    language: line,
-    jobTitle: line,
     agencyName: line,
     agencyAddress: line,
-    region: line,
-    experience: line,
+    // Empty clears it.
+    region: z.enum(REGIONS).or(z.literal("")),
     specialization: z
         .array(line.min(1, "A specialty cannot be blank"))
         .max(TAGS_MAX, `Pick at most ${TAGS_MAX} specialties`),
@@ -49,11 +47,9 @@ export const updateProfileSchema = z
 // quietly leaving it ungated.
 /** Meaningless on a seeker account, and refused there. */
 export const REALTOR_FIELDS = [
-    "jobTitle",
     "agencyName",
     "agencyAddress",
     "region",
-    "experience",
     "specialization",
     "availabilityStatus",
     "contactMeans",

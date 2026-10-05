@@ -14,6 +14,26 @@ export type ContactMeans = "Phone" | "WhatsApp" | "Email" | "Phone & WhatsApp";
 // Exported so the schema's enum and the request validator read the same list.
 export const GENDERS: Gender[] = ["Female", "Male", "Other", "Prefer not to say"];
 export const AVAILABILITY_STATUSES: AvailabilityStatus[] = ["Available", "Busy", "Away"];
+/** Where a realtor works: one of the six geopolitical zones, or anywhere in Nigeria. */
+export type Region =
+  | "Nationwide"
+  | "North Central"
+  | "North East"
+  | "North West"
+  | "South East"
+  | "South South"
+  | "South West";
+
+export const REGIONS: Region[] = [
+  "Nationwide",
+  "North Central",
+  "North East",
+  "North West",
+  "South East",
+  "South South",
+  "South West",
+];
+
 export const CONTACT_MEANS: ContactMeans[] = [
   "Phone",
   "WhatsApp",
@@ -29,18 +49,16 @@ export interface IProfile {
   middleName: string;
   bio: string;
   gender?: Gender;
+  dateOfBirth?: Date;
   address: string;
   city: string;
   state: string;
   country: string;
   whatsapp: string;
-  language: string;
 
-  jobTitle: string;
   agencyName: string;
   agencyAddress: string;
   region: string;
-  experience: string;
   specialization: string[];
   availabilityStatus: AvailabilityStatus;
   contactMeans: ContactMeans;
@@ -87,18 +105,19 @@ const profileSchema = new Schema<IProfile>(
         message: "{VALUE} is not a valid gender",
       },
     },
+    // Matched against the NIN and BVN records alongside the names.
+    dateOfBirth: { type: Date },
     address: text(),
     city: text(),
     state: text(),
     country: text(),
     whatsapp: text(),
-    language: text(),
 
-    jobTitle: text(),
     agencyName: text(),
     agencyAddress: text(),
+    // Not an enum here: profiles saved before the zones were fixed may hold free text.
+    // The validator holds new writes to REGIONS.
     region: text(),
-    experience: text(),
     specialization: { type: [String], default: [] },
     availabilityStatus: {
       type: String,
@@ -164,17 +183,15 @@ export const publicProfile = (profile: ProfileDoc) => ({
   middleName: profile.middleName,
   bio: profile.bio,
   gender: profile.gender,
+  dateOfBirth: profile.dateOfBirth,
   address: profile.address,
   city: profile.city,
   state: profile.state,
   country: profile.country,
   whatsapp: profile.whatsapp,
-  language: profile.language,
-  jobTitle: profile.jobTitle,
   agencyName: profile.agencyName,
   agencyAddress: profile.agencyAddress,
   region: profile.region,
-  experience: profile.experience,
   specialization: profile.specialization,
   availabilityStatus: profile.availabilityStatus,
   contactMeans: profile.contactMeans,

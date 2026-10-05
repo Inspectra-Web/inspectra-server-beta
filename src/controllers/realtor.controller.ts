@@ -14,8 +14,6 @@ interface PublicRealtorRow {
   city: string;
   state: string;
   agencyName: string;
-  jobTitle: string;
-  experience: string;
   region: string;
   bio: string;
   specialization: string[];
@@ -40,8 +38,6 @@ const publicRealtor = (row: PublicRealtorRow) => ({
   city: row.city,
   state: row.state,
   agencyName: row.agencyName,
-  jobTitle: row.jobTitle,
-  experience: row.experience,
   region: row.region,
   bio: row.bio,
   specialization: row.specialization,
@@ -71,8 +67,6 @@ const vettedStages: PipelineStage[] = [
       state: { $ifNull: ["$profile.state", ""] },
       agencyName: { $ifNull: ["$profile.agencyName", ""] },
       agencyAddress: { $ifNull: ["$profile.agencyAddress", ""] },
-      jobTitle: { $ifNull: ["$profile.jobTitle", ""] },
-      experience: { $ifNull: ["$profile.experience", ""] },
       region: { $ifNull: ["$profile.region", ""] },
       bio: { $ifNull: ["$profile.bio", ""] },
       specialization: { $ifNull: ["$profile.specialization", []] },
@@ -141,8 +135,6 @@ export const listRealtors = async (req: Request, res: Response): Promise<void> =
             city: 1,
             state: 1,
             agencyName: 1,
-            jobTitle: 1,
-            experience: 1,
             region: 1,
             bio: 1,
             specialization: 1,
@@ -198,8 +190,6 @@ export const getRealtor = async (req: Request, res: Response): Promise<void> => 
         state: 1,
         agencyName: 1,
         agencyAddress: 1,
-        jobTitle: 1,
-        experience: 1,
         region: 1,
         bio: 1,
         specialization: 1,

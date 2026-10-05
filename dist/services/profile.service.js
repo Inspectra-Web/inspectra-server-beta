@@ -51,9 +51,8 @@ export const ensureProfile = async (user) => {
  *
  * The profile fields are not an arbitrary set. Each is something a buyer reads on the
  * listing or needs in order to reach the person behind it, which is the whole point:
- * a verified property hanging off a blank profile is half a promise kept. jobTitle is
- * deliberately out, because the UI already falls back to "Realtor", and so is
- * agencyName, because an independent realtor has no agency to name.
+ * a verified property hanging off a blank profile is half a promise kept. agencyName is
+ * deliberately out, because an independent realtor has no agency to name.
  *
  * Pure, and given everything it reads. The composer's gate and the profile endpoint
  * that renders it both call this, and a rule enforced in one place and described in

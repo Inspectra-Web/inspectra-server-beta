@@ -3,6 +3,15 @@ import { PROPERTY_CATEGORIES, PROPERTY_TYPES, } from "../types/property.type.js"
 // Exported so the schema's enum and the request validator read the same list.
 export const GENDERS = ["Female", "Male", "Other", "Prefer not to say"];
 export const AVAILABILITY_STATUSES = ["Available", "Busy", "Away"];
+export const REGIONS = [
+    "Nationwide",
+    "North Central",
+    "North East",
+    "North West",
+    "South East",
+    "South South",
+    "South West",
+];
 export const CONTACT_MEANS = [
     "Phone",
     "WhatsApp",
@@ -31,17 +40,18 @@ const profileSchema = new Schema({
             message: "{VALUE} is not a valid gender",
         },
     },
+    // Matched against the NIN and BVN records alongside the names.
+    dateOfBirth: { type: Date },
     address: text(),
     city: text(),
     state: text(),
     country: text(),
     whatsapp: text(),
-    language: text(),
-    jobTitle: text(),
     agencyName: text(),
     agencyAddress: text(),
+    // Not an enum here: profiles saved before the zones were fixed may hold free text.
+    // The validator holds new writes to REGIONS.
     region: text(),
-    experience: text(),
     specialization: { type: [String], default: [] },
     availabilityStatus: {
         type: String,
@@ -101,17 +111,15 @@ export const publicProfile = (profile) => ({
     middleName: profile.middleName,
     bio: profile.bio,
     gender: profile.gender,
+    dateOfBirth: profile.dateOfBirth,
     address: profile.address,
     city: profile.city,
     state: profile.state,
     country: profile.country,
     whatsapp: profile.whatsapp,
-    language: profile.language,
-    jobTitle: profile.jobTitle,
     agencyName: profile.agencyName,
     agencyAddress: profile.agencyAddress,
     region: profile.region,
-    experience: profile.experience,
     specialization: profile.specialization,
     availabilityStatus: profile.availabilityStatus,
     contactMeans: profile.contactMeans,
