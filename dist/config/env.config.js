@@ -11,6 +11,7 @@ const envConfig = {
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     RESEND_EMAIL: process.env.RESEND_EMAIL,
     RESEND_WEBHOOK_SECRET: process.env.RESEND_WEBHOOK_SECRET,
+    SUPPORT_EMAIL: process.env.SUPPORT_EMAIL || "support@inspectraweb.com",
     CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
     CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
     CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,

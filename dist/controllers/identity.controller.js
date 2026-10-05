@@ -3,6 +3,7 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { MAX_ATTEMPTS, publicIdentity } from "../models/identity.model.js";
 import { encrypt, fingerprint } from "../services/crypto.service.js";
+import { sendIdentityVerified } from "../services/email.service.js";
 import { composeName, ensureProfile, listOf, profileGaps, words, } from "../services/profile.service.js";
 import { uploadAvatar } from "../services/upload.service.js";
 const UNREACHABLE = "We could not reach the verification service. Try again.";
@@ -98,11 +99,11 @@ const dayOf = (value) => {
 const recordDay = (person, label) => {
     const day = dayOf(person.date_of_birth);
     if (!day)
-        throw new AppError(`We could not read the date of birth on your ${label} record. Try again, or contact support.`, 502);
+        throw new AppError(`We could not read the date of birth on your ${label} record. Try again, or contact ${envConfig.SUPPORT_EMAIL}.`, 502);
     return day;
 };
 const attemptsNote = (left) => left === 0
-    ? "That was your last attempt. Contact support to review your identity."
+    ? `That was your last attempt. Contact ${envConfig.SUPPORT_EMAIL} to review your identity.`
     : `You have ${left} attempt${left === 1 ? "" : "s"} left.`;
 /** Identity verification only opens on a complete profile. Checked before any attempt is claimed. */
 const requireCompleteProfile = async (user) => {
@@ -138,7 +139,7 @@ const startedIdentity = (userId) => Identity.findOneAndUpdate({ user: userId }, 
 const withAttempt = async (userId, step) => {
     const claimed = await Identity.findOneAndUpdate({ user: userId, verified: false, attempts: trusted({ $lt: MAX_ATTEMPTS }) }, { $inc: { attempts: 1 } }, { returnDocument: "after" });
     if (!claimed)
-        throw new AppError(`You have used all ${MAX_ATTEMPTS} attempts. Contact support to review your identity.`, 403);
+        throw new AppError(`You have used all ${MAX_ATTEMPTS} attempts. Contact ${envConfig.SUPPORT_EMAIL} to review your identity.`, 403);
     const refund = () => Identity.updateOne({ user: userId, attempts: trusted({ $gt: 0 }) }, { $inc: { attempts: -1 } });
     try {
         const result = await step();
@@ -247,6 +248,7 @@ export const verifyMyBvn = async (req, res) => {
         }, { runValidators: true });
     });
     const identity = await startedIdentity(user._id);
+    sendIdentityVerified(user.email);
     res.status(200).json({
         status: "success",
         message: "Your identity is verified.",

@@ -3,12 +3,14 @@ import { pipeline } from "node:stream/promises";
 import { Types, trusted } from "mongoose";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
+import Inquiry from "../models/inquiry.model.js";
+import Inspection, { ACTIVE_STATUSES } from "../models/inspection.model.js";
 import Profile from "../models/profile.model.js";
 import Property, { ACTIVE_LISTING_STATUSES, detailedProperty, publicProperty, } from "../models/property.model.js";
 import PropertyView from "../models/propertyView.model.js";
 import { PLANS } from "../models/subscription.model.js";
 import User from "../models/user.model.js";
-import { sendListingSubmitted, sendListingUpdated, } from "../services/email.service.js";
+import { sendListingRemoved, sendListingSubmitted, sendListingUpdated, } from "../services/email.service.js";
 import { ensureProfile, listingEligibility } from "../services/profile.service.js";
 import { entitlements, listingAllowance, resolveSubscription, } from "../services/subscription.service.js";
 import { destroyAsset, isPdf, uploadDocument, uploadPhoto, } from "../services/upload.service.js";
@@ -596,10 +598,51 @@ export const refreshMyProperty = async (req, res) => {
         },
     });
 };
+/**
+ * A listing's viewings and threads drop out of both consoles with it, so the live ones
+ * are closed out first and each buyer gets one notice covering both. Before the delete,
+ * so a failure leaves the listing in place to retry rather than gone with bookings
+ * still open behind it. Returns the notices for the caller to send once it is gone.
+ */
+const closeOutListing = async (property) => {
+    const [inspections, inquiries] = await Promise.all([
+        Inspection.find({
+            property: property._id,
+            status: trusted({ $in: ACTIVE_STATUSES }),
+        }).select("seeker slot"),
+        Inquiry.find({ property: property._id, status: trusted({ $ne: "closed" }) }).select("seeker"),
+    ]);
+    if (!inspections.length && !inquiries.length)
+        return [];
+    const now = new Date();
+    await Promise.all([
+        Inspection.updateMany({ _id: trusted({ $in: inspections.map((row) => row._id) }) }, { $set: { status: "cancelled", cancelledBy: "realtor", decidedAt: now } }),
+        Inquiry.updateMany({ _id: trusted({ $in: inquiries.map((row) => row._id) }) }, { $set: { status: "closed" } }),
+    ]);
+    const buyers = new Map();
+    const buyer = (id) => {
+        const key = String(id);
+        const existing = buyers.get(key);
+        if (existing)
+            return existing;
+        const brief = { ref: property.ref, property: property.title, conversation: false };
+        buyers.set(key, brief);
+        return brief;
+    };
+    for (const row of inspections)
+        buyer(row.seeker).slot = row.slot;
+    for (const row of inquiries)
+        buyer(row.seeker).conversation = true;
+    const users = await User.find({ _id: trusted({ $in: [...buyers.keys()] }) }).select("email");
+    return users.map((user) => [user.email, buyers.get(String(user._id))]);
+};
 export const deleteMyProperty = async (req, res) => {
     const { id } = propertyIdSchema.parse(req.params);
     const property = await findOwned(id, req.user._id);
+    const notices = await closeOutListing(property);
     await property.deleteOne();
+    for (const [email, listing] of notices)
+        sendListingRemoved(email, listing);
     // After the row is gone: an orphaned file is a smaller problem than a listing
     // that refused to delete because Cloudinary was down.
     await Promise.all([

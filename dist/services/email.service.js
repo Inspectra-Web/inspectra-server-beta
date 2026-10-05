@@ -16,6 +16,12 @@ const sendEmail = async ({ to, subject, html, text }) => {
     if (error)
         throw new AppError(`Email delivery failed: ${error.message}`, 502);
 };
+/** Names are stored lowercased, so title-case them as the client does: "ada obi" -> "Ada Obi". */
+const displayName = (fullname) => fullname
+    .split(/s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 const ACCOUNT_REASON = "You're getting this because this address was used to sign up on INSPECTRA.";
 export const sendVerifyEmail = (to, url) => sendEmail({
     to,
@@ -46,6 +52,124 @@ export const sendResetEmail = (to, url) => sendEmail({
             note("This link expires in 30 minutes. If you did not ask for this, ignore this email and your password stays the same."),
         ],
     }),
+});
+/**
+ * After the address is confirmed, so it only reaches someone who can sign in. A
+ * realtor's next step is the identity check that stands between them and a listing;
+ * a seeker's is the marketplace.
+ */
+export const sendWelcome = (to, role) => notify(to, () => sendEmail({
+    to,
+    subject: "Welcome to INSPECTRA",
+    ...layout({
+        eyebrow: "Account",
+        preheader: role === "realtor"
+            ? "Your email is confirmed. Verify your identity to start listing."
+            : "Your email is confirmed. Every listing here shows its verification status.",
+        reason: ACCOUNT_REASON,
+        blocks: role === "realtor"
+            ? [
+                heading("Welcome to INSPECTRA"),
+                lead("Your email is confirmed. Before you can list, complete your profile and verify your identity with your NIN and BVN. Buyers see that check on every listing you post."),
+                button("Verify your identity", `${envConfig.CLIENT_URL}/realtor/verification`),
+            ]
+            : [
+                heading("Welcome to INSPECTRA"),
+                lead("Your email is confirmed. Every listing here carries its verification status, so you can see what has been checked before you book a viewing."),
+                button("Browse listings", `${envConfig.CLIENT_URL}/listings`),
+            ],
+    }),
+}));
+/**
+ * Either way the password changed, from settings or through a reset link. The one
+ * person who needs this is the owner who did not do it, so it says what to do then.
+ */
+export const sendPasswordChanged = (to) => notify(to, () => sendEmail({
+    to,
+    subject: "Your INSPECTRA password was changed",
+    ...layout({
+        eyebrow: "Security",
+        preheader: "If this wasn't you, reset your password now.",
+        reason: ACCOUNT_REASON,
+        blocks: [
+            heading("Your password was changed"),
+            lead("The password on your account was just changed, and every other session was signed out."),
+            note("If this wasn't you, reset your password straight away."),
+            button("Reset password", `${envConfig.CLIENT_URL}/forgot-password`),
+        ],
+    }),
+}));
+/** An admin moved the account. Without this the first a user hears of a suspension
+ *  is a login that fails. A realtor is also told their listings came off the site. */
+export const sendAccountStatus = (to, status, role) => notify(to, () => sendEmail({
+    to,
+    subject: status === "suspended"
+        ? "Your INSPECTRA account is suspended"
+        : "Your INSPECTRA account is active again",
+    ...layout({
+        eyebrow: "Account",
+        preheader: status === "suspended"
+            ? "You can no longer sign in."
+            : "You can sign in again.",
+        reason: ACCOUNT_REASON,
+        blocks: status === "suspended"
+            ? [
+                heading("Your account is suspended"),
+                lead(role === "realtor"
+                    ? "An INSPECTRA admin suspended your account. You can no longer sign in, and your listings are off the site until it is reactivated."
+                    : "An INSPECTRA admin suspended your account. You can no longer sign in."),
+                note(`If you think this is a mistake, write to ${envConfig.SUPPORT_EMAIL}.`),
+            ]
+            : [
+                heading("Your account is active again"),
+                lead(role === "realtor"
+                    ? "An INSPECTRA admin reactivated your account. You can sign in again, and your listings are back on the site."
+                    : "An INSPECTRA admin reactivated your account. You can sign in again."),
+                button("Sign in", `${envConfig.CLIENT_URL}/login`),
+            ],
+    }),
+}));
+/** The last rung of the identity check. It is what puts the badge on the realtor and
+ *  what unlocks listing, so the mail points at the listing form. */
+export const sendIdentityVerified = (to) => notify(to, () => sendEmail({
+    to,
+    subject: "Your identity is verified",
+    ...layout({
+        eyebrow: "Identity",
+        preheader: "Your NIN and BVN check out. You can list properties now.",
+        reason: "You're getting this because you verified your identity on INSPECTRA.",
+        blocks: [
+            heading("Your identity is verified"),
+            lead("Your NIN and BVN match. Buyers now see you as a verified realtor, and you can list properties."),
+            button("List a property", `${envConfig.CLIENT_URL}/realtor/listings/new`),
+        ],
+    }),
+}));
+/** To every admin, when a realtor account is created. Sent at sign-up, so the address
+ *  is not confirmed yet and the mail says so. */
+export const sendRealtorJoined = (realtor) => notify(realtor.email, async () => {
+    const to = await adminEmails();
+    if (!to.length)
+        return;
+    await sendEmail({
+        to,
+        subject: `New realtor: ${displayName(realtor.name)}`,
+        ...layout({
+            eyebrow: "Realtors",
+            preheader: `${displayName(realtor.name)} signed up as a realtor.`,
+            reason: "You're getting this because you are an INSPECTRA admin.",
+            blocks: [
+                heading("New realtor signed up"),
+                lead(`${displayName(realtor.name)} created a realtor account.`),
+                rows([
+                    ["Name", displayName(realtor.name)],
+                    ["Email", realtor.email],
+                ]),
+                note("Their email is not confirmed yet, and they still have to verify their identity before they can list."),
+                button("View realtor", `${envConfig.CLIENT_URL}/admin/realtors/${realtor.id}`),
+            ],
+        }),
+    });
 });
 /* ------------------------------------------------------------------ *
  * Listing notifications. The trust axis has two people waiting on each other:
@@ -91,7 +215,7 @@ const adminListing = (listing, subject, title, intro, status) => notify(listing.
                     status,
                     tone: "pending",
                     title: listing.title,
-                    lines: [`${listing.city}, ${listing.state}`, `Realtor: ${listing.realtor}`],
+                    lines: [`${listing.city}, ${listing.state}`, `Realtor: ${displayName(listing.realtor)}`],
                 }),
                 button("Review listing", `${envConfig.CLIENT_URL}/admin/verification/${listing.id}`),
             ],
@@ -177,20 +301,20 @@ export const sendInquiryReceived = (to, inquiry, first) => notify(inquiry.ref, (
         : `New message: ${inquiry.property}`,
     ...layout({
         eyebrow: "Inquiries",
-        preheader: `${inquiry.person}: ${inquiry.message}`,
+        preheader: `${displayName(inquiry.person)}: ${inquiry.message}`,
         reason: LISTER_REASON,
         blocks: [
             heading(first ? "New inquiry" : "New message"),
             lead(first
-                ? `${inquiry.person} asked about one of your listings.`
-                : `${inquiry.person} sent another message about one of your listings.`),
+                ? `${displayName(inquiry.person)} asked about one of your listings.`
+                : `${displayName(inquiry.person)} sent another message about one of your listings.`),
             slip({
                 ref: inquiry.ref,
                 status: first ? "Inquiry" : "Message",
                 tone: "neutral",
                 title: inquiry.property,
             }),
-            quote(`From ${inquiry.person}`, inquiry.message),
+            quote(`From ${displayName(inquiry.person)}`, inquiry.message),
             button("Reply", `${envConfig.CLIENT_URL}/realtor/leads/${inquiry.id}`),
         ],
     }),
@@ -201,13 +325,13 @@ export const sendInquiryReplied = (to, inquiry) => notify(inquiry.ref, () => sen
     subject: `Reply about ${inquiry.property}`,
     ...layout({
         eyebrow: "Inquiries",
-        preheader: `${inquiry.person}: ${inquiry.message}`,
+        preheader: `${displayName(inquiry.person)}: ${inquiry.message}`,
         reason: "You're getting this because you asked a realtor about a listing on INSPECTRA.",
         blocks: [
             heading("You have a reply"),
-            lead(`${inquiry.person} replied to your inquiry.`),
+            lead(`${displayName(inquiry.person)} replied to your inquiry.`),
             slip({ ref: inquiry.ref, status: "Reply", tone: "neutral", title: inquiry.property }),
-            quote(`From ${inquiry.person}`, inquiry.message),
+            quote(`From ${displayName(inquiry.person)}`, inquiry.message),
             button("Open conversation", `${envConfig.CLIENT_URL}/dashboard/inquiries/${inquiry.id}`),
         ],
     }),
@@ -217,11 +341,12 @@ export const sendInquiryReplied = (to, inquiry) => notify(inquiry.ref, () => sen
  * time is written in Lagos regardless of where the server is. Reading it in UTC
  * would put a morning appointment an hour earlier than anyone agreed.
  */
-const when = (inspection) => new Intl.DateTimeFormat("en-NG", {
+const lagosTime = (slot) => new Intl.DateTimeFormat("en-NG", {
     dateStyle: "full",
     timeStyle: "short",
     timeZone: "Africa/Lagos",
-}).format(inspection.slot);
+}).format(slot);
+const when = (inspection) => lagosTime(inspection.slot);
 const realtorLink = (inspection) => `${envConfig.CLIENT_URL}/realtor/inspections/${inspection.id}`;
 const seekerLink = (inspection) => `${envConfig.CLIENT_URL}/dashboard/inspections/${inspection.id}`;
 const viewingSlip = (inspection, status, tone) => slip({
@@ -238,11 +363,11 @@ export const sendInspectionRequested = (to, inspection) => notify(inspection.ref
     subject: `Viewing requested: ${inspection.property}`,
     ...layout({
         eyebrow: "Viewings",
-        preheader: `${inspection.person} wants to view it on ${when(inspection)}.`,
+        preheader: `${displayName(inspection.person)} wants to view it on ${when(inspection)}.`,
         reason: LISTER_REASON,
         blocks: [
             heading("Viewing requested"),
-            lead(`${inspection.person} asked to view one of your listings.`),
+            lead(`${displayName(inspection.person)} asked to view one of your listings.`),
             viewingSlip(inspection, "Requested", "pending"),
             ...(inspection.message ? [quote("Their note", inspection.message)] : []),
             button("Confirm or decline", realtorLink(inspection)),
@@ -261,7 +386,7 @@ export const sendInspectionRescheduled = (to, inspection) => notify(inspection.r
         reason: LISTER_REASON,
         blocks: [
             heading("Viewing moved"),
-            lead(`${inspection.person} moved their viewing, so it needs confirming again.`),
+            lead(`${displayName(inspection.person)} moved their viewing, so it needs confirming again.`),
             viewingSlip(inspection, "New time", "pending"),
             button("Confirm or decline", realtorLink(inspection)),
         ],
@@ -305,7 +430,7 @@ export const sendInspectionDecided = (to, inspection, outcome) => {
                 lead(result.lead),
                 viewingSlip(inspection, result.status, result.tone),
                 ...(inspection.message
-                    ? [quote(`From ${inspection.person}`, inspection.message)]
+                    ? [quote(`From ${displayName(inspection.person)}`, inspection.message)]
                     : []),
                 button("Open viewing", seekerLink(inspection)),
             ],
@@ -324,13 +449,47 @@ export const sendInspectionCancelled = (to, inspection, by) => notify(inspection
         blocks: [
             heading("Viewing cancelled"),
             lead(by === "seeker"
-                ? `${inspection.person} cancelled their viewing.`
-                : `${inspection.person} cancelled this viewing.`),
+                ? `${displayName(inspection.person)} cancelled their viewing.`
+                : `${displayName(inspection.person)} cancelled this viewing.`),
             viewingSlip(inspection, "Cancelled", "disputed"),
             button("Open viewing", by === "seeker" ? realtorLink(inspection) : seekerLink(inspection)),
         ],
     }),
 }));
+/**
+ * To a buyer, when the realtor deletes a listing they had business on. Both the
+ * viewing and the thread drop out of the buyer's console with the listing, so this
+ * mail is the only place they learn it. No link to either: both now answer 404.
+ */
+export const sendListingRemoved = (to, listing) => {
+    const lost = [
+        ...(listing.slot ? [`your viewing on ${lagosTime(listing.slot)} is cancelled`] : []),
+        ...(listing.conversation ? ["your conversation with the realtor is closed"] : []),
+    ].join(", and ");
+    notify(listing.ref, () => sendEmail({
+        to,
+        subject: `Listing removed: ${listing.property}`,
+        ...layout({
+            eyebrow: listing.slot ? "Viewings" : "Inquiries",
+            preheader: `The realtor took this listing down, so ${lost}.`,
+            reason: listing.slot
+                ? SEEKER_REASON
+                : "You're getting this because you asked a realtor about a listing on INSPECTRA.",
+            blocks: [
+                heading("Listing removed"),
+                lead(`The realtor took this listing down, so ${lost}.`),
+                slip({
+                    ref: listing.ref,
+                    status: "Removed",
+                    tone: "disputed",
+                    title: listing.property,
+                    lines: listing.slot ? [lagosTime(listing.slot)] : [],
+                }),
+                button("Browse listings", `${envConfig.CLIENT_URL}/listings`),
+            ],
+        }),
+    }));
+};
 const naira = new Intl.NumberFormat("en-NG", {
     style: "currency",
     currency: "NGN",

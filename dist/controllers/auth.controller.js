@@ -2,7 +2,7 @@ import { trusted } from "mongoose";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import User, { hashToken, publicUser } from "../models/user.model.js";
-import { sendResetEmail, sendVerifyEmail } from "../services/email.service.js";
+import { sendPasswordChanged, sendRealtorJoined, sendResetEmail, sendVerifyEmail, sendWelcome, } from "../services/email.service.js";
 import { ensureProfile } from "../services/profile.service.js";
 import { cookieOptions, sendAuthCookie } from "../services/token.service.js";
 export const register = async (req, res) => {
@@ -11,6 +11,9 @@ export const register = async (req, res) => {
     const verifyToken = user.createEmailVerifyToken();
     await user.save();
     await ensureProfile(user);
+    // Ahead of the verification send: if that fails the account still exists.
+    if (user.role === "realtor")
+        sendRealtorJoined({ id: String(user._id), name: user.fullname, email: user.email });
     await sendVerifyEmail(user.email, `${envConfig.CLIENT_URL}/verify-email?token=${verifyToken}`);
     res.status(201).json({
         status: "success",
@@ -31,6 +34,8 @@ export const verifyEmail = async (req, res) => {
     user.emailVerifyToken = undefined;
     user.emailVerifyExpires = undefined;
     await user.save({ validateBeforeSave: false });
+    if (user.role !== "admin")
+        sendWelcome(user.email, user.role);
     res.status(200).json({
         status: "success",
         message: "Email verified. You can now log in.",
@@ -57,7 +62,7 @@ export const login = async (req, res) => {
     if (!user || !(await user.correctPassword(password)))
         throw new AppError("Incorrect email or password.", 401);
     if (user.status === "suspended")
-        throw new AppError("This account has been suspended. Please contact support.", 403);
+        throw new AppError(`This account has been suspended. Please contact ${envConfig.SUPPORT_EMAIL}.`, 403);
     // After the password check, so it tells an attacker nothing they lack.
     if (!user.emailVerified)
         throw new AppError("Please verify your email address before logging in.", 403);
@@ -81,6 +86,7 @@ export const updatePassword = async (req, res) => {
         throw new AppError("Your current password is incorrect.", 401);
     user.password = password;
     await user.save();
+    sendPasswordChanged(user.email);
     // The save invalidated every token issued before it, this caller's included.
     sendAuthCookie(user, 200, res);
 };
@@ -114,11 +120,12 @@ export const resetPassword = async (req, res) => {
     if (!user)
         throw new AppError("Reset link is invalid or has expired.", 400);
     if (user.status === "suspended")
-        throw new AppError("This account has been suspended. Please contact support.", 403);
+        throw new AppError(`This account has been suspended. Please contact ${envConfig.SUPPORT_EMAIL}.`, 403);
     user.password = password;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
+    sendPasswordChanged(user.email);
     // No auto-login: verification stays the gate, and the client sends them to sign in.
     res.status(200).json({
         status: "success",

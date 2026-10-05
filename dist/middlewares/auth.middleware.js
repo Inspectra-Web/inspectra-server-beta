@@ -21,7 +21,7 @@ export const protect = async (req, _res, next) => {
     if (currentUser.changedPasswordAfter(decoded.iat))
         throw new AppError("Your password was recently changed. Please log in again.", 401);
     if (currentUser.status === "suspended")
-        throw new AppError("This account has been suspended. Please contact support.", 403);
+        throw new AppError(`This account has been suspended. Please contact ${envConfig.SUPPORT_EMAIL}.`, 403);
     req.user = currentUser;
     next();
 };
