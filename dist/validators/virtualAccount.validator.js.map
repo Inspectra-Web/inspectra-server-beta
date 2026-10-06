@@ -1,0 +1,1 @@
+{"version":3,"file":"virtualAccount.validator.js","sourceRoot":"","sources":["../../src/validators/virtualAccount.validator.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,CAAC,EAAE,MAAM,KAAK,CAAC;AAExB,MAAM,CAAC,MAAM,wBAAwB,GAAG,CAAC,CAAC,YAAY,CAAC;IACrD,OAAO,EAAE,CAAC,CAAC,OAAO,CAAC,IAAI,EAAE,iDAAiD,CAAC;CAC5E,CAAC,CAAC"}

@@ -22,6 +22,11 @@ const envConfig = {
     FLW_BASE_URL: process.env.FLW_BASE_URL,
     FLW_SECRET_KEY: process.env.FLW_SECRET_KEY,
     FLW_WEBHOOK_HASH: process.env.FLW_WEBHOOK_HASH,
+    PLANBOK_BASE_URL: process.env.PLANBOK_BASE_URL || "https://api.planbok.io",
+    PLANBOK_API_KEY: process.env.PLANBOK_API_KEY,
+    // The raw 64-hex organization secret, not a ciphertext. In .env for now; it belongs
+    // in a secrets manager before launch.
+    PLANBOK_ORG_SECRET: process.env.PLANBOK_ORG_SECRET,
     // Read only by src/scripts/admin.script.ts, which checks them itself.
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,

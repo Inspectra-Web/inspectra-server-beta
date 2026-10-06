@@ -15,6 +15,7 @@ import profileRoute from "../routes/profile.route.js";
 import propertyRoute from "../routes/property.route.js";
 import realtorRoute from "../routes/realtor.route.js";
 import subscriptionRoute from "../routes/subscription.route.js";
+import virtualAccountRoute from "../routes/virtualAccount.route.js";
 const appConfig = (app) => {
     app.set("trust proxy", 1);
     app.use(helmet());
@@ -36,6 +37,7 @@ const appConfig = (app) => {
     app.use("/api/v1/realtors", realtorRoute);
     app.use("/api/v1/subscription", subscriptionRoute);
     app.use("/api/v1/payments", paymentRoute);
+    app.use("/api/v1/virtual-accounts", virtualAccountRoute);
     app.use("/api/v1/admin", adminRoute);
     app.use(notFound);
     app.use(globalErrorHandler);
