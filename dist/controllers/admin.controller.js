@@ -6,10 +6,12 @@ import Property, { detailedProperty, } from "../models/property.model.js";
 import Payment from "../models/payment.model.js";
 import Subscription, { PLANS, isPaid, publicSubscription, } from "../models/subscription.model.js";
 import User, { publicUser } from "../models/user.model.js";
+import VirtualAccount, { publicVirtualAccount, } from "../models/virtualAccount.model.js";
 import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
+import { getBalance } from "../services/planbok.service.js";
 import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
-import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, userIdSchema, } from "../validators/admin.validator.js";
+import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, listVirtualAccountsSchema, userIdSchema, } from "../validators/admin.validator.js";
 import { listAdminPaymentsSchema, paymentReferenceSchema, } from "../validators/payment.validator.js";
 export const adminLogin = async (req, res) => {
     const { email, password } = req.body;
@@ -746,6 +748,102 @@ export const getPayment = async (req, res) => {
             plan: entitlements(subscription),
             allowance,
             history: history.map(adminPayment),
+        },
+    });
+};
+const virtualAccountRow = (row) => ({
+    id: row._id,
+    accountNumber: row.accountNumber,
+    accountName: row.accountName,
+    bankName: row.bankName,
+    currency: row.currency,
+    status: row.status,
+    activatedAt: row.activatedAt,
+    createdAt: row.createdAt,
+    realtor: {
+        id: row.realtorId,
+        fullname: row.realtorName,
+        email: row.realtorEmail,
+        avatar: row.realtorAvatar,
+        status: row.realtorStatus,
+    },
+});
+/** Realtor accounts only: the escrow and revenue house accounts belong to nobody. */
+export const listVirtualAccounts = async (req, res) => {
+    const { q, status, page, limit } = listVirtualAccountsSchema.parse(req.query);
+    const statusMatch = status === "all" ? [] : [{ $match: { status } }];
+    const pipeline = [
+        { $match: { kind: "realtor" } },
+        { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
+        { $unwind: "$realtor" },
+        {
+            $addFields: {
+                realtorId: "$realtor._id",
+                realtorName: "$realtor.fullname",
+                realtorEmail: "$realtor.email",
+                realtorAvatar: { $ifNull: ["$realtor.avatar", ""] },
+                realtorStatus: "$realtor.status",
+            },
+        },
+    ];
+    if (q) {
+        const pattern = new RegExp(escapeRegex(q), "i");
+        pipeline.push({
+            $match: {
+                $or: [{ realtorName: pattern }, { realtorEmail: pattern }, { accountNumber: pattern }],
+            },
+        });
+    }
+    pipeline.push({
+        $facet: {
+            rows: [
+                ...statusMatch,
+                { $sort: { createdAt: -1, _id: -1 } },
+                { $skip: (page - 1) * limit },
+                { $limit: limit },
+            ],
+            total: [...statusMatch, { $count: "count" }],
+            statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+        },
+    });
+    const [result] = await VirtualAccount.aggregate(pipeline);
+    const rows = result?.rows ?? [];
+    const total = result?.total[0]?.count ?? 0;
+    const counts = { all: 0, active: 0, pending: 0 };
+    for (const row of result?.statuses ?? []) {
+        counts[row._id] += row.count;
+        counts.all += row.count;
+    }
+    res.status(200).json({
+        status: "success",
+        data: {
+            accounts: rows.map(virtualAccountRow),
+            counts,
+            page,
+            limit,
+            total,
+            pages: Math.max(1, Math.ceil(total / limit)),
+        },
+    });
+};
+// Its own endpoint rather than part of getUser, so a Planbok outage fails this panel
+// and not the whole realtor page.
+export const getRealtorVirtualAccount = async (req, res) => {
+    const { id } = userIdSchema.parse(req.params);
+    const realtor = await User.findById(id);
+    if (!realtor || realtor.role !== "realtor")
+        throw new AppError("No realtor with that id.", 404);
+    const account = await VirtualAccount.findOne({ user: realtor._id });
+    const balance = account?.status === "active" && account.planbokId ? await getBalance(account.planbokId) : null;
+    res.status(200).json({
+        status: "success",
+        data: {
+            account: account && {
+                ...publicVirtualAccount(account),
+                consentedAt: account.consentedAt,
+                createdAt: account.createdAt,
+            },
+            balance,
         },
     });
 };

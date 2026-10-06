@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, getPayment, listPayments, listRealtors, listUsers, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, listPayments, listRealtors, listUsers, listVirtualAccounts, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -22,11 +22,13 @@ router.get("/users", protect, restrictTo("admin"), listUsers);
 router.get("/realtors", protect, restrictTo("admin"), listRealtors);
 router.get("/listings", protect, restrictTo("admin"), listListings);
 router.get("/payments", protect, restrictTo("admin"), listPayments);
+router.get("/virtual-accounts", protect, restrictTo("admin"), listVirtualAccounts);
 // Below the literal above, and keyed on the reference rather than an id: that is the
 // string on the realtor's receipt and in Flutterwave.
 router.get("/payments/:reference", protect, restrictTo("admin"), getPayment);
 router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
+router.get("/realtors/:id/virtual-account", protect, restrictTo("admin"), getRealtorVirtualAccount);
 // The review lives here, not on the property router: that one is realtor-only, so an
 // admin cannot reach any route on it.
 router.patch("/listings/:id/verification", protect, restrictTo("admin"), validate(reviewListingSchema), reviewListing);

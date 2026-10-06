@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DOCUMENT_STATUSES, VERIFICATION_STATUSES, } from "../models/property.model.js";
+import { ACCOUNT_STATUSES } from "../models/virtualAccount.model.js";
 const line = z.string("Required").trim();
 const SEARCH_MAX = 100;
 const CITY_MAX = 80;
@@ -31,6 +32,17 @@ export const listRealtorsSchema = z.object({
     certified: z.enum(["all", "yes", "no"]).default("all"),
     identity: z.enum(["all", "verified", "unverified"]).default("all"),
     status: z.enum(["all", "active", "suspended", "pending"]).default("all"),
+    page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+    limit: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+        .default(PAGE_SIZE),
+});
+export const listVirtualAccountsSchema = z.object({
+    q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+    status: z.enum(["all", ...ACCOUNT_STATUSES]).default("all"),
     page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
     limit: z.coerce
         .number()
