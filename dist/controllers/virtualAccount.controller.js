@@ -3,6 +3,7 @@ import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
 import VirtualAccount, { publicVirtualAccount } from "../models/virtualAccount.model.js";
 import { decrypt } from "../services/crypto.service.js";
+import { sendVirtualAccountOpened } from "../services/email.service.js";
 import { createAccount, findAccount, getBalance } from "../services/planbok.service.js";
 import { ensureProfile } from "../services/profile.service.js";
 export const getMyVirtualAccount = async (req, res) => {
@@ -53,6 +54,7 @@ export const openMyVirtualAccount = async (req, res) => {
     account.status = "active";
     account.activatedAt = new Date();
     await account.save();
+    sendVirtualAccountOpened(user.email, account);
     res.status(201).json({ status: "success", data: { account: publicVirtualAccount(account) } });
 };
 //# sourceMappingURL=virtualAccount.controller.js.map
