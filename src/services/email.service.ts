@@ -821,5 +821,36 @@ export const sendPaymentReceipt = (to: string, payment: PaymentBrief): void =>
     }),
   );
 
+export interface VirtualAccountBrief {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+}
+
+/** To the realtor, once Planbok has opened the account. Sent once, not on a repeat open. */
+export const sendVirtualAccountOpened = (to: string, account: VirtualAccountBrief): void =>
+  notify(to, () =>
+    sendEmail({
+      to,
+      subject: "Your virtual account is open",
+      ...layout({
+        eyebrow: "Virtual account",
+        preheader: `Your NGN account ${account.accountNumber} at ${account.bankName} is ready.`,
+        reason: "You're getting this because you opened a virtual account on INSPECTRA.",
+        blocks: [
+          heading("Your virtual account is open"),
+          lead(
+            "Inspection fees you earn are paid into this account once each viewing is confirmed.",
+          ),
+          rows([
+            ["Account number", account.accountNumber],
+            ["Account name", account.accountName],
+            ["Bank", account.bankName],
+          ]),
+          button("View account", `${envConfig.CLIENT_URL}/realtor/virtual-account`),
+        ],
+      }),
+    }),
+  );
 
 export default sendEmail;
