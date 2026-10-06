@@ -5,6 +5,7 @@ import {
   VERIFICATION_STATUSES,
   type VerificationStatus,
 } from "../models/property.model.js";
+import { ACCOUNT_STATUSES } from "../models/virtualAccount.model.js";
 
 const line = z.string("Required").trim();
 
@@ -58,6 +59,20 @@ export const listRealtorsSchema = z.object({
 });
 
 export type ListRealtorsQuery = z.infer<typeof listRealtorsSchema>;
+
+export const listVirtualAccountsSchema = z.object({
+  q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+  status: z.enum(["all", ...ACCOUNT_STATUSES]).default("all"),
+  page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+    .default(PAGE_SIZE),
+});
+
+export type ListVirtualAccountsQuery = z.infer<typeof listVirtualAccountsSchema>;
 
 // "all" is the sentinel the controller checks, as on the other admin directories. "open"
 // is the review queue's own: everything still undecided, which is pending plus disputed.
