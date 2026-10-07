@@ -48,16 +48,25 @@ const planbok = async (path: string, method = "GET", body?: object) => {
   return result.data;
 };
 
+export interface PlanbokWallet {
+  id: string;
+  refId: string;
+  address: string;
+  blockchain: string;
+  state: string;
+}
+
 let publicKey = "";
 
-// A fresh ciphertext per call: Planbok rejects one older than 5 minutes.
-const encryptedSecret = async () => {
+// A fresh ciphertext per call: Planbok rejects one older than 5 minutes. Virtual accounts
+// take `verify`, wallets take `sign`.
+const encryptedSecret = async (context: "verify" | "sign") => {
   if (!publicKey) publicKey = (await planbok("/config/organization/public-key")).publicKey;
 
   const payload = JSON.stringify({
     secret: envConfig.PLANBOK_ORG_SECRET,
     timestamp: Date.now(),
-    context: "verify",
+    context,
   });
 
   return publicEncrypt(
@@ -78,7 +87,7 @@ export const createAccount = async (
 ): Promise<PlanbokAccount | undefined> => {
   const data = await planbok("/virtual-accounts", "POST", {
     idempotencyKey,
-    encryptedOrganizationSecret: await encryptedSecret(),
+    encryptedOrganizationSecret: await encryptedSecret("verify"),
     count: 1,
     metadata: [{ name, refId, currencies: ["NGN"], holderDetails: holder }],
   });
@@ -116,9 +125,33 @@ export const transfer = async (
 ) =>
   planbok(`/virtual-accounts/${accountId}/transfer`, "POST", {
     idempotencyKey,
-    encryptedOrganizationSecret: await encryptedSecret(),
+    encryptedOrganizationSecret: await encryptedSecret("verify"),
     amount: toNaira(amount),
     destinationType,
     destination,
     narration,
   });
+
+export const createWallet = async (
+  idempotencyKey: string,
+  refId: string,
+  name: string,
+): Promise<PlanbokWallet | undefined> => {
+  const data: PlanbokWallet[] = await planbok("/organization/wallets", "POST", {
+    idempotencyKey,
+    encryptedOrganizationSecret: await encryptedSecret("sign"),
+    walletSetId: envConfig.PLANBOK_WALLET_SET_ID,
+    blockchains: ["BSC"],
+    count: 1,
+    accountType: "eoa",
+    metadata: [{ name, refId }],
+  });
+
+  return data[0];
+};
+
+export const findWallet = async (refId: string): Promise<PlanbokWallet | undefined> => {
+  const data: PlanbokWallet[] = await planbok(`/wallets?refId=${encodeURIComponent(refId)}`);
+
+  return data[0];
+};

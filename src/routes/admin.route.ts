@@ -9,10 +9,12 @@ import {
   listListings,
   getPayment,
   getRealtorVirtualAccount,
+  getRealtorWallet,
   listPayments,
   listRealtors,
   listUsers,
   listVirtualAccounts,
+  listWallets,
   reviewListing,
   setRealtorSubscription,
   updateUserStatus,
@@ -51,6 +53,8 @@ router.get("/payments", protect, restrictTo("admin"), listPayments);
 
 router.get("/virtual-accounts", protect, restrictTo("admin"), listVirtualAccounts);
 
+router.get("/wallets", protect, restrictTo("admin"), listWallets);
+
 // Below the literal above, and keyed on the reference rather than an id: that is the
 // string on the realtor's receipt and in Flutterwave.
 router.get("/payments/:reference", protect, restrictTo("admin"), getPayment);
@@ -65,6 +69,8 @@ router.get(
   restrictTo("admin"),
   getRealtorVirtualAccount,
 );
+
+router.get("/realtors/:id/wallet", protect, restrictTo("admin"), getRealtorWallet);
 
 // The review lives here, not on the property router: that one is realtor-only, so an
 // admin cannot reach any route on it.

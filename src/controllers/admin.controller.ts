@@ -26,6 +26,7 @@ import VirtualAccount, {
   publicVirtualAccount,
   type AccountStatus,
 } from "../models/virtualAccount.model.js";
+import Wallet, { publicWallet, type WalletStatus } from "../models/wallet.model.js";
 import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
 import { getBalance } from "../services/planbok.service.js";
 import {
@@ -42,6 +43,7 @@ import {
   listingIdSchema,
   listUsersSchema,
   listVirtualAccountsSchema,
+  listWalletsSchema,
   userIdSchema,
   type ReviewListingInput,
   type UserStatusInput,
@@ -1166,5 +1168,121 @@ export const getRealtorVirtualAccount = async (req: Request, res: Response): Pro
       },
       balance,
     },
+  });
+};
+
+interface WalletRow {
+  _id: Types.ObjectId;
+  address: string;
+  blockchain: string;
+  status: WalletStatus;
+  activatedAt?: Date;
+  createdAt: Date;
+  realtorId: Types.ObjectId;
+  realtorName: string;
+  realtorEmail: string;
+  realtorAvatar: string;
+  realtorStatus: IUser["status"];
+}
+
+interface WalletPage {
+  rows: WalletRow[];
+  total: { count: number }[];
+  statuses: { _id: WalletStatus; count: number }[];
+}
+
+const walletRow = (row: WalletRow) => ({
+  id: row._id,
+  address: row.address,
+  blockchain: row.blockchain,
+  status: row.status,
+  activatedAt: row.activatedAt,
+  createdAt: row.createdAt,
+  realtor: {
+    id: row.realtorId,
+    fullname: row.realtorName,
+    email: row.realtorEmail,
+    avatar: row.realtorAvatar,
+    status: row.realtorStatus,
+  },
+});
+
+export const listWallets = async (req: Request, res: Response): Promise<void> => {
+  const { q, status, page, limit } = listWalletsSchema.parse(req.query);
+
+  const statusMatch: PipelineStage.FacetPipelineStage[] =
+    status === "all" ? [] : [{ $match: { status } }];
+
+  const pipeline: PipelineStage[] = [
+    { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
+    { $unwind: "$realtor" },
+    {
+      $addFields: {
+        realtorId: "$realtor._id",
+        realtorName: "$realtor.fullname",
+        realtorEmail: "$realtor.email",
+        realtorAvatar: { $ifNull: ["$realtor.avatar", ""] },
+        realtorStatus: "$realtor.status",
+      },
+    },
+  ];
+
+  if (q) {
+    const pattern = new RegExp(escapeRegex(q), "i");
+    pipeline.push({
+      $match: { $or: [{ realtorName: pattern }, { realtorEmail: pattern }, { address: pattern }] },
+    });
+  }
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...statusMatch,
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+      ],
+      total: [...statusMatch, { $count: "count" }],
+      statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+    },
+  });
+
+  const [result] = await Wallet.aggregate<WalletPage>(pipeline);
+
+  const rows = result?.rows ?? [];
+  const total = result?.total[0]?.count ?? 0;
+
+  const counts: Record<WalletStatus | "all", number> = { all: 0, active: 0, pending: 0 };
+
+  for (const row of result?.statuses ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      wallets: rows.map(walletRow),
+      counts,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+export const getRealtorWallet = async (req: Request, res: Response): Promise<void> => {
+  const { id } = userIdSchema.parse(req.params);
+
+  const realtor = await User.findById(id);
+
+  if (!realtor || realtor.role !== "realtor") throw new AppError("No realtor with that id.", 404);
+
+  const wallet = await Wallet.findOne({ user: realtor._id });
+
+  res.status(200).json({
+    status: "success",
+    data: { wallet: wallet && { ...publicWallet(wallet), createdAt: wallet.createdAt } },
   });
 };

@@ -29,6 +29,7 @@ const envConfig = {
   // The raw 64-hex organization secret, not a ciphertext. In .env for now; it belongs
   // in a secrets manager before launch.
   PLANBOK_ORG_SECRET: process.env.PLANBOK_ORG_SECRET!,
+  PLANBOK_WALLET_SET_ID: process.env.PLANBOK_WALLET_SET_ID!,
   // Read only by src/scripts/admin.script.ts, which checks them itself.
   ADMIN_EMAIL: process.env.ADMIN_EMAIL,
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
