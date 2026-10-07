@@ -21,4 +21,5 @@ CLAUDE.md
 
 .gitignore
 
-orgscript.js
+dkgscript.cjs
+signscript.cjs
