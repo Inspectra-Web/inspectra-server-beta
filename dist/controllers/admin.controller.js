@@ -7,11 +7,12 @@ import Payment from "../models/payment.model.js";
 import Subscription, { PLANS, isPaid, publicSubscription, } from "../models/subscription.model.js";
 import User, { publicUser } from "../models/user.model.js";
 import VirtualAccount, { publicVirtualAccount, } from "../models/virtualAccount.model.js";
+import Wallet, { publicWallet } from "../models/wallet.model.js";
 import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
 import { getBalance } from "../services/planbok.service.js";
 import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
-import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, listVirtualAccountsSchema, userIdSchema, } from "../validators/admin.validator.js";
+import { listListingsSchema, listRealtorsSchema, listingIdSchema, listUsersSchema, listVirtualAccountsSchema, listWalletsSchema, userIdSchema, } from "../validators/admin.validator.js";
 import { listAdminPaymentsSchema, paymentReferenceSchema, } from "../validators/payment.validator.js";
 export const adminLogin = async (req, res) => {
     const { email, password } = req.body;
@@ -845,6 +846,86 @@ export const getRealtorVirtualAccount = async (req, res) => {
             },
             balance,
         },
+    });
+};
+const walletRow = (row) => ({
+    id: row._id,
+    address: row.address,
+    blockchain: row.blockchain,
+    status: row.status,
+    activatedAt: row.activatedAt,
+    createdAt: row.createdAt,
+    realtor: {
+        id: row.realtorId,
+        fullname: row.realtorName,
+        email: row.realtorEmail,
+        avatar: row.realtorAvatar,
+        status: row.realtorStatus,
+    },
+});
+export const listWallets = async (req, res) => {
+    const { q, status, page, limit } = listWalletsSchema.parse(req.query);
+    const statusMatch = status === "all" ? [] : [{ $match: { status } }];
+    const pipeline = [
+        { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
+        { $unwind: "$realtor" },
+        {
+            $addFields: {
+                realtorId: "$realtor._id",
+                realtorName: "$realtor.fullname",
+                realtorEmail: "$realtor.email",
+                realtorAvatar: { $ifNull: ["$realtor.avatar", ""] },
+                realtorStatus: "$realtor.status",
+            },
+        },
+    ];
+    if (q) {
+        const pattern = new RegExp(escapeRegex(q), "i");
+        pipeline.push({
+            $match: { $or: [{ realtorName: pattern }, { realtorEmail: pattern }, { address: pattern }] },
+        });
+    }
+    pipeline.push({
+        $facet: {
+            rows: [
+                ...statusMatch,
+                { $sort: { createdAt: -1, _id: -1 } },
+                { $skip: (page - 1) * limit },
+                { $limit: limit },
+            ],
+            total: [...statusMatch, { $count: "count" }],
+            statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+        },
+    });
+    const [result] = await Wallet.aggregate(pipeline);
+    const rows = result?.rows ?? [];
+    const total = result?.total[0]?.count ?? 0;
+    const counts = { all: 0, active: 0, pending: 0 };
+    for (const row of result?.statuses ?? []) {
+        counts[row._id] += row.count;
+        counts.all += row.count;
+    }
+    res.status(200).json({
+        status: "success",
+        data: {
+            wallets: rows.map(walletRow),
+            counts,
+            page,
+            limit,
+            total,
+            pages: Math.max(1, Math.ceil(total / limit)),
+        },
+    });
+};
+export const getRealtorWallet = async (req, res) => {
+    const { id } = userIdSchema.parse(req.params);
+    const realtor = await User.findById(id);
+    if (!realtor || realtor.role !== "realtor")
+        throw new AppError("No realtor with that id.", 404);
+    const wallet = await Wallet.findOne({ user: realtor._id });
+    res.status(200).json({
+        status: "success",
+        data: { wallet: wallet && { ...publicWallet(wallet), createdAt: wallet.createdAt } },
     });
 };
 //# sourceMappingURL=admin.controller.js.map
