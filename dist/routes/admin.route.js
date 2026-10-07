@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, listPayments, listRealtors, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, listPayments, listRealtors, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -31,6 +31,7 @@ router.get("/listings/:id", protect, restrictTo("admin"), getListing);
 router.get("/users/:id", protect, restrictTo("admin"), getUser);
 router.get("/realtors/:id/virtual-account", protect, restrictTo("admin"), getRealtorVirtualAccount);
 router.get("/realtors/:id/wallet", protect, restrictTo("admin"), getRealtorWallet);
+router.get("/realtors/:id/wallet/balances", protect, restrictTo("admin"), getRealtorWalletBalances);
 // The review lives here, not on the property router: that one is realtor-only, so an
 // admin cannot reach any route on it.
 router.patch("/listings/:id/verification", protect, restrictTo("admin"), validate(reviewListingSchema), reviewListing);

@@ -81,4 +81,15 @@ export const findWallet = async (refId) => {
     const data = await planbok(`/wallets?refId=${encodeURIComponent(refId)}`);
     return data[0];
 };
+// `amount` is a decimal string in token units and stays one: 18 decimals overflow a number.
+export const getWalletBalances = async (walletId) => {
+    const data = await planbok(`/wallets/${walletId}/balances?limit=50`);
+    return data.map(({ amount, token }) => ({
+        amount,
+        symbol: token.symbol,
+        name: token.name,
+        decimals: token.decimals,
+        standard: token.standard,
+    }));
+};
 //# sourceMappingURL=planbok.service.js.map
