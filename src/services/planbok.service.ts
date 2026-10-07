@@ -155,3 +155,21 @@ export const findWallet = async (refId: string): Promise<PlanbokWallet | undefin
 
   return data[0];
 };
+
+interface PlanbokTokenBalance {
+  amount: string;
+  token: { name: string; symbol: string; decimals: number; standard: string };
+}
+
+// `amount` is a decimal string in token units and stays one: 18 decimals overflow a number.
+export const getWalletBalances = async (walletId: string) => {
+  const data: PlanbokTokenBalance[] = await planbok(`/wallets/${walletId}/balances?limit=50`);
+
+  return data.map(({ amount, token }) => ({
+    amount,
+    symbol: token.symbol,
+    name: token.name,
+    decimals: token.decimals,
+    standard: token.standard,
+  }));
+};

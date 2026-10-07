@@ -10,6 +10,7 @@ import {
   getPayment,
   getRealtorVirtualAccount,
   getRealtorWallet,
+  getRealtorWalletBalances,
   listPayments,
   listRealtors,
   listUsers,
@@ -71,6 +72,13 @@ router.get(
 );
 
 router.get("/realtors/:id/wallet", protect, restrictTo("admin"), getRealtorWallet);
+
+router.get(
+  "/realtors/:id/wallet/balances",
+  protect,
+  restrictTo("admin"),
+  getRealtorWalletBalances,
+);
 
 // The review lives here, not on the property router: that one is realtor-only, so an
 // admin cannot reach any route on it.

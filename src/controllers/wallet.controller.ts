@@ -3,7 +3,12 @@ import type { Request, Response } from "express";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
 import Wallet, { publicWallet } from "../models/wallet.model.js";
-import { createWallet, findWallet, type PlanbokWallet } from "../services/planbok.service.js";
+import {
+  createWallet,
+  findWallet,
+  getWalletBalances,
+  type PlanbokWallet,
+} from "../services/planbok.service.js";
 
 const NOT_CREATED = "We could not create your wallet. Try again later.";
 
@@ -11,6 +16,16 @@ export const getMyWallet = async (req: Request, res: Response): Promise<void> =>
   const wallet = await Wallet.findOne({ user: req.user!._id });
 
   res.status(200).json({ status: "success", data: { wallet: wallet && publicWallet(wallet) } });
+};
+
+// Apart from getMyWallet, so a Planbok outage fails the balance and not the address.
+export const getMyWalletBalances = async (req: Request, res: Response): Promise<void> => {
+  const wallet = await Wallet.findOne({ user: req.user!._id });
+
+  const balances =
+    wallet?.status === "active" && wallet.planbokId ? await getWalletBalances(wallet.planbokId) : null;
+
+  res.status(200).json({ status: "success", data: { balances } });
 };
 
 export const openMyWallet = async (req: Request, res: Response): Promise<void> => {

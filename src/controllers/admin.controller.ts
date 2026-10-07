@@ -28,7 +28,7 @@ import VirtualAccount, {
 } from "../models/virtualAccount.model.js";
 import Wallet, { publicWallet, type WalletStatus } from "../models/wallet.model.js";
 import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
-import { getBalance } from "../services/planbok.service.js";
+import { getBalance, getWalletBalances } from "../services/planbok.service.js";
 import {
   entitlements,
   listingAllowance,
@@ -1285,4 +1285,20 @@ export const getRealtorWallet = async (req: Request, res: Response): Promise<voi
     status: "success",
     data: { wallet: wallet && { ...publicWallet(wallet), createdAt: wallet.createdAt } },
   });
+};
+
+// Apart from getRealtorWallet, so a Planbok outage fails the balance and not the address.
+export const getRealtorWalletBalances = async (req: Request, res: Response): Promise<void> => {
+  const { id } = userIdSchema.parse(req.params);
+
+  const realtor = await User.findById(id);
+
+  if (!realtor || realtor.role !== "realtor") throw new AppError("No realtor with that id.", 404);
+
+  const wallet = await Wallet.findOne({ user: realtor._id });
+
+  const balances =
+    wallet?.status === "active" && wallet.planbokId ? await getWalletBalances(wallet.planbokId) : null;
+
+  res.status(200).json({ status: "success", data: { balances } });
 };
