@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { INSPECTION_STATUSES, } from "../models/inspection.model.js";
+import { ATTENDANCES, INSPECTION_STATUSES, } from "../models/inspection.model.js";
 // Mirrors NOTE_MAX / RESPONSE_MAX on the schema in inspection.model.ts.
 const NOTE_MAX = 500;
 const RESPONSE_MAX = 500;
@@ -31,6 +31,10 @@ export const createInspectionSchema = z.strictObject({
 });
 /** Moving a booking. Only the buyer sets the time, so only they send this. */
 export const rescheduleSchema = z.strictObject({ slot });
+/** One side's answer, after a paid viewing, to whether it happened. */
+export const attendanceSchema = z.strictObject({
+    answer: z.enum(ATTENDANCES, "Say whether the viewing happened"),
+});
 export const INSPECTION_DECISIONS = [
     "confirmed",
     "declined",

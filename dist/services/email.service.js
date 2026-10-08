@@ -474,6 +474,60 @@ export const sendInspectionUnpaid = (to, inspection, audience) => notify(inspect
         ],
     }),
 }));
+/** The day after a paid viewing: asks one side whether it happened. */
+export const sendAttendanceCheck = (to, inspection, audience) => notify(inspection.ref, () => sendEmail({
+    to,
+    subject: `Did the viewing happen? ${inspection.property}`,
+    ...layout({
+        eyebrow: "Viewings",
+        preheader: `It was booked for ${when(inspection)}.`,
+        reason: audience === "realtor" ? LISTER_REASON : SEEKER_REASON,
+        blocks: [
+            heading("Did the viewing happen?"),
+            lead(audience === "seeker"
+                ? `Tell us whether your viewing with ${displayName(inspection.person)} went ahead. If you don't answer within 48 hours, the fee is paid to them as normal.`
+                : `Tell us whether ${displayName(inspection.person)} came to the viewing. The fee is released to you once it is confirmed, or 48 hours from now if the buyer raises nothing.`),
+            viewingSlip(inspection, "Awaiting confirmation", "pending"),
+            button("Answer now", audience === "realtor" ? realtorLink(inspection) : seekerLink(inspection)),
+        ],
+    }),
+}));
+/** To the side that did not raise it: a paid viewing's money is on hold for review. */
+export const sendDisputeNotice = (to, inspection, audience) => notify(inspection.ref, () => sendEmail({
+    to,
+    subject: `Viewing under review: ${inspection.property}`,
+    ...layout({
+        eyebrow: "Viewings",
+        preheader: `It was booked for ${when(inspection)}.`,
+        reason: audience === "realtor" ? LISTER_REASON : SEEKER_REASON,
+        blocks: [
+            heading("This viewing is under review"),
+            lead(`${displayName(inspection.person)}'s account of this viewing differs from yours, so the fee is on hold while INSPECTRA reviews it. We will be in touch, and you will hear the outcome within 5 business days.`),
+            viewingSlip(inspection, "Under review", "disputed"),
+            button("Open viewing", audience === "realtor" ? realtorLink(inspection) : seekerLink(inspection)),
+        ],
+    }),
+}));
+/** To every admin, when a paid viewing's two sides disagree about what happened. */
+export const sendDisputeOpened = (inspection, reason) => notify(inspection.ref, async () => {
+    const to = await adminEmails();
+    if (!to.length)
+        return;
+    await sendEmail({
+        to,
+        subject: `Dispute opened: ${inspection.property}`,
+        ...layout({
+            eyebrow: "Disputes",
+            preheader: reason,
+            reason: "You're getting this because you resolve disputes on INSPECTRA.",
+            blocks: [
+                heading("A viewing fee is in dispute"),
+                lead(`${reason} The fee is frozen until an admin decides. Target: 5 business days.`),
+                viewingSlip(inspection, "Disputed", "disputed"),
+            ],
+        }),
+    });
+});
 /**
  * To a buyer, when the realtor deletes a listing they had business on. Both the
  * viewing and the thread drop out of the buyer's console with the listing, so this

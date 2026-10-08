@@ -5,9 +5,21 @@ import Profile from "../models/profile.model.js";
 import Property, { listingCard, } from "../models/property.model.js";
 import User, { personCard } from "../models/user.model.js";
 import { sendInspectionCancelled, sendInspectionDecided, sendInspectionRequested, sendInspectionRescheduled, } from "../services/email.service.js";
-import { priceOnConfirm } from "../services/escrow.service.js";
+import { announceDispute, priceOnConfirm, recordAttendance, } from "../services/escrow.service.js";
 import { inspectionIdSchema, listInspectionsSchema, } from "../validators/inspection.validator.js";
 const other = (side) => (side === "seeker" ? "realtor" : "seeker");
+/**
+ * A paid viewing whose slot has passed is settled by both sides' answers, and money
+ * already moving or under review is not either party's to call off. Moving or
+ * cancelling either would route around the escrow.
+ */
+const assertMovable = (inspection) => {
+    const { status } = inspection.escrow;
+    if (status !== "none" && status !== "unpaid" && status !== "held")
+        throw new AppError("This viewing's payment is being settled, so it can't be changed.", 409);
+    if (status === "held" && inspection.slot.getTime() <= Date.now())
+        throw new AppError("This viewing has taken place. Say whether it happened instead of changing it.", 409);
+};
 const SORTS = {
     // The _id tiebreaker keeps a row from slipping between pages on equal slots, which
     // matters more here than elsewhere: half-hour slots collide constantly.
@@ -304,6 +316,7 @@ export const rescheduleInspection = async (req, res) => {
     const inspection = await findOwn(id, "seeker", req.user._id);
     if (!live(inspection.status))
         throw new AppError(`This viewing is already ${inspection.status}.`, 409);
+    assertMovable(inspection);
     if (inspection.slot.getTime() === slot.getTime())
         throw new AppError("That is the time already booked.", 409);
     inspection.slot = slot;
@@ -373,6 +386,11 @@ export const decideInspection = async (req, res) => {
         if (!priceOnConfirm(inspection, listing?.inspectionFee ?? 0))
             throw new AppError("This viewing is too soon for the buyer to pay first. Decline it and ask for a later time.", 422);
     }
+    // On a paid viewing, closing it out is the realtor saying it happened.
+    if (status === "completed" &&
+        inspection.escrow.status === "held" &&
+        !inspection.escrow.realtorAnswer.answer)
+        recordAttendance(inspection, "realtor", "happened");
     inspection.status = status;
     if (response !== undefined)
         inspection.response = response;
@@ -405,6 +423,7 @@ export const cancelInspection = async (req, res) => {
         throw new AppError("This viewing is not yours.", 403);
     if (!live(inspection.status))
         throw new AppError(`This viewing is already ${inspection.status}.`, 409);
+    assertMovable(inspection);
     const side = fromSeeker ? "seeker" : "realtor";
     inspection.status = "cancelled";
     inspection.cancelledBy = side;
@@ -423,4 +442,36 @@ export const cancelInspection = async (req, res) => {
         data: { inspection: inspectionRecord(inspection) },
     });
 };
+/* ------------------------------------------------------------------ *
+ * After a paid viewing: each side says whether it happened. The answer decides
+ * where the money goes, so it is given once and only while the money is held.
+ * ------------------------------------------------------------------ */
+const ANSWERED = {
+    happened: "Thanks. The fee is released once the viewing is confirmed.",
+    disputed: "Thanks. The fee is on hold while INSPECTRA reviews what happened.",
+    no_show: "Thanks. The other side has 48 hours to respond before this is settled.",
+};
+const answerAttendance = (side) => async (req, res) => {
+    const { id } = inspectionIdSchema.parse(req.params);
+    const { answer } = req.body;
+    const inspection = await findOwn(id, side, req.user._id);
+    const { escrow } = inspection;
+    if (escrow.status !== "held")
+        throw new AppError("This viewing has no payment waiting on an answer.", 409);
+    if (inspection.slot.getTime() > Date.now())
+        throw new AppError("This viewing has not happened yet.", 422);
+    if ((side === "seeker" ? escrow.seekerAnswer : escrow.realtorAnswer).answer)
+        throw new AppError("You have already answered for this viewing.", 409);
+    const dispute = recordAttendance(inspection, side, answer);
+    await inspection.save({ validateModifiedOnly: true });
+    if (dispute)
+        await announceDispute(inspection, side, dispute);
+    res.status(200).json({
+        status: "success",
+        message: dispute ? ANSWERED.disputed : ANSWERED[answer],
+        data: { inspection: inspectionRecord(inspection) },
+    });
+};
+export const answerAsSeeker = answerAttendance("seeker");
+export const answerAsRealtor = answerAttendance("realtor");
 //# sourceMappingURL=inspection.controller.js.map

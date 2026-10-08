@@ -1,11 +1,11 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { cancelInspection, createInspection, decideInspection, getMyInspection, getRealtorInspection, listMyInspections, listRealtorInspections, rescheduleInspection, } from "../controllers/inspection.controller.js";
+import { answerAsRealtor, answerAsSeeker, cancelInspection, createInspection, decideInspection, getMyInspection, getRealtorInspection, listMyInspections, listRealtorInspections, rescheduleInspection, } from "../controllers/inspection.controller.js";
 import { startInspectionCheckout } from "../controllers/payment.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
-import { createInspectionSchema, decisionSchema, rescheduleSchema, } from "../validators/inspection.validator.js";
+import { attendanceSchema, createInspectionSchema, decisionSchema, rescheduleSchema, } from "../validators/inspection.validator.js";
 const tooManyBookings = (_req, _res, next) => next(new AppError("Too many viewing requests. Please try again later.", 429));
 // Booking mails a realtor and puts a commitment in their diary, so it is the one
 // spam vector here. Answering and cancelling are uncapped: the model already caps
@@ -34,6 +34,9 @@ router.get("/me/:id", restrictTo("seeker"), getMyInspection);
 router.patch("/me/:id/slot", restrictTo("seeker"), validate(rescheduleSchema), rescheduleInspection);
 // Every call opens a live transaction at Flutterwave, so it shares the booking cap.
 router.post("/me/:id/pay", restrictTo("seeker"), bookingLimiter, startInspectionCheckout);
+// After a paid viewing, each side says whether it happened.
+router.patch("/me/:id/attendance", restrictTo("seeker"), validate(attendanceSchema), answerAsSeeker);
+router.patch("/realtor/:id/attendance", restrictTo("realtor"), validate(attendanceSchema), answerAsRealtor);
 router.get("/realtor", restrictTo("realtor"), listRealtorInspections);
 router.get("/realtor/:id", restrictTo("realtor"), getRealtorInspection);
 router.patch("/realtor/:id/status", restrictTo("realtor"), validate(decisionSchema), decideInspection);
