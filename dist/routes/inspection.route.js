@@ -1,6 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { cancelInspection, createInspection, decideInspection, getMyInspection, getRealtorInspection, listMyInspections, listRealtorInspections, rescheduleInspection, } from "../controllers/inspection.controller.js";
+import { startInspectionCheckout } from "../controllers/payment.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -31,6 +32,8 @@ router.get("/me/:id", restrictTo("seeker"), getMyInspection);
 // and the buyer proposes another, which is one direction of travel instead of two
 // halves of a negotiation neither console could show.
 router.patch("/me/:id/slot", restrictTo("seeker"), validate(rescheduleSchema), rescheduleInspection);
+// Every call opens a live transaction at Flutterwave, so it shares the booking cap.
+router.post("/me/:id/pay", restrictTo("seeker"), bookingLimiter, startInspectionCheckout);
 router.get("/realtor", restrictTo("realtor"), listRealtorInspections);
 router.get("/realtor/:id", restrictTo("realtor"), getRealtorInspection);
 router.patch("/realtor/:id/status", restrictTo("realtor"), validate(decisionSchema), decideInspection);

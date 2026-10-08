@@ -22,13 +22,15 @@ const router = Router();
 // than believing the body. Not rate limited either, because it retries.
 router.post("/webhook", flutterwaveWebhook);
 router.use(protect);
-// A seeker never buys a plan. The only money they will ever move is an inspection fee,
-// and that is a different route on a different router when it lands.
+// Either payer comes back through here: a realtor from a plan, a seeker from an
+// inspection fee. The handler checks the payment is theirs.
+router.post("/:reference/verify", validate(verifyPaymentSchema), verifyPayment);
+// A seeker never buys a plan. Their checkout opens from the inspection router, on the
+// viewing it pays for.
 router.use(restrictTo("realtor"));
 // Declared above "/:reference", which would otherwise swallow it.
 router.get("/me", listMyPayments);
 router.post("/subscription", checkoutLimiter, validate(checkoutSchema), startSubscriptionCheckout);
-router.post("/:reference/verify", validate(verifyPaymentSchema), verifyPayment);
 router.get("/:reference", getMyPayment);
 router.patch("/:reference/cancel", cancelMyPayment);
 export default router;

@@ -579,6 +579,9 @@ export const listPayments = async (req, res) => {
     monthStart.setHours(0, 0, 0, 0);
     const statusMatch = status === "all" ? [] : [{ $match: { status } }];
     const pipeline = [
+        // Realtor billing only. A seeker's inspection payment is escrow, not revenue, and
+        // its payer is not a realtor; it gets its own view with the escrow console.
+        { $match: { kind: { $ne: "inspection" } } },
         { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "realtor" } },
         { $unwind: "$realtor" },
         {

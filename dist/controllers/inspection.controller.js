@@ -5,6 +5,7 @@ import Profile from "../models/profile.model.js";
 import Property, { listingCard, } from "../models/property.model.js";
 import User, { personCard } from "../models/user.model.js";
 import { sendInspectionCancelled, sendInspectionDecided, sendInspectionRequested, sendInspectionRescheduled, } from "../services/email.service.js";
+import { priceOnConfirm } from "../services/escrow.service.js";
 import { inspectionIdSchema, listInspectionsSchema, } from "../validators/inspection.validator.js";
 const other = (side) => (side === "seeker" ? "realtor" : "seeker");
 const SORTS = {
@@ -366,6 +367,11 @@ export const decideInspection = async (req, res) => {
     }
     else if (inspection.status !== "requested") {
         throw new AppError(`This viewing is already ${inspection.status}.`, 409);
+    }
+    if (status === "confirmed") {
+        const listing = await Property.findById(inspection.property).select("inspectionFee");
+        if (!priceOnConfirm(inspection, listing?.inspectionFee ?? 0))
+            throw new AppError("This viewing is too soon for the buyer to pay first. Decline it and ask for a later time.", 422);
     }
     inspection.status = status;
     if (response !== undefined)
