@@ -5,6 +5,7 @@ import { Types, type PipelineStage } from "mongoose";
 
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
+import Inspection, { inspectionRecord } from "../models/inspection.model.js";
 import Payment, {
   publicPayment,
   type IPayment,
@@ -23,6 +24,7 @@ import {
 } from "../models/subscription.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
 import { sendPaymentReceipt } from "../services/email.service.js";
+import { holdEscrow } from "../services/escrow.service.js";
 import {
   entitlements,
   listingAllowance,
@@ -36,6 +38,7 @@ import {
   type CheckoutInput,
   type VerifyPaymentInput,
 } from "../validators/payment.validator.js";
+import { inspectionIdSchema } from "../validators/inspection.validator.js";
 
 /* ------------------------------------------------------------------ *
  * Flutterwave v3, over plain fetch.
@@ -54,7 +57,7 @@ interface FlwTransaction {
   status: string;
   payment_type?: string;
   card?: { last_4digits?: string; type?: string };
-  meta?: { user?: string; tier?: string; cadence?: string };
+  meta?: { user?: string; tier?: string; cadence?: string; kind?: string; inspection?: string };
 }
 
 const flwHeaders = {
@@ -66,11 +69,13 @@ const flwHeaders = {
 // to it would give a double slash the router never matches.
 const clientOrigin = envConfig.CLIENT_URL.replace(/\/+$/, "");
 
-/** Opens a hosted checkout and hands back the link to send the realtor to. */
+/** Opens a hosted checkout and hands back the link to send the payer to. `returnPath`
+ *  is a client route the payer can reach signed in, inside their own console. */
 const createCharge = async (
   payment: PaymentDoc,
   user: UserDoc,
   description: string,
+  returnPath: string,
 ): Promise<string> => {
   const response = await fetch(`${envConfig.FLW_BASE_URL}/payments`, {
     method: "POST",
@@ -81,7 +86,7 @@ const createCharge = async (
       currency: payment.currency,
       // The client origin, not the API. The session cookie is only first-party there,
       // so a return to the API would land the realtor signed out.
-      redirect_url: `${clientOrigin}/realtor/subscription/callback`,
+      redirect_url: `${clientOrigin}${returnPath}`,
       customer: {
         email: user.email,
         name: user.fullname,
@@ -103,8 +108,10 @@ const createCharge = async (
       meta: {
         reference: payment.reference,
         user: payment.user.toString(),
+        kind: payment.kind,
         tier: payment.tier,
         cadence: payment.cadence,
+        inspection: payment.inspection?.toString(),
       },
     }),
   });
@@ -169,11 +176,31 @@ const cadenceOf = (value?: string): Cadence | null =>
  * cannot become a way to mint a plan by paying a naira.
  */
 const rebuildFromMeta = async (flw: FlwTransaction): Promise<PaymentDoc | null> => {
-  const tier = tierOf(flw.meta?.tier);
-  const cadence = cadenceOf(flw.meta?.cadence);
   const owner = flw.meta?.user;
 
-  if (!tier || !cadence || !owner || !Types.ObjectId.isValid(owner)) return null;
+  if (!owner || !Types.ObjectId.isValid(owner)) return null;
+
+  if (flw.meta?.kind === "inspection") {
+    const id = flw.meta.inspection;
+    const inspection = id && Types.ObjectId.isValid(id) ? await Inspection.findById(id) : null;
+
+    if (!inspection?.seeker.equals(owner)) return null;
+
+    console.warn(`Rebuilding payment ${flw.tx_ref}: its attempt row was already gone.`);
+
+    return Payment.create({
+      user: inspection.seeker,
+      reference: flw.tx_ref,
+      kind: "inspection",
+      inspection: inspection._id,
+      amount: inspection.escrow.fee + inspection.escrow.commission,
+    });
+  }
+
+  const tier = tierOf(flw.meta?.tier);
+  const cadence = cadenceOf(flw.meta?.cadence);
+
+  if (!tier || !cadence) return null;
 
   console.warn(`Rebuilding payment ${flw.tx_ref}: its attempt row was already gone.`);
 
@@ -227,6 +254,38 @@ const applyToSubscription = async (payment: PaymentDoc): Promise<SubscriptionDoc
 };
 
 /**
+ * Puts a seeker's verified payment into escrow, exactly once. The same claim-then-apply
+ * shape as a plan: whichever of the redirect and the webhook loses still runs the hold,
+ * because the hold is idempotent and re-running it is how a half-finished credit heals.
+ */
+const creditInspection = async (
+  payment: PaymentDoc,
+  flw: FlwTransaction,
+): Promise<PaymentDoc> => {
+  const claimed = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: "pending" },
+    {
+      $set: {
+        status: "paid",
+        flwId: flw.id,
+        flwRef: flw.flw_ref,
+        channel: flw.payment_type ?? "",
+        cardLast4: flw.card?.last_4digits ?? "",
+        cardBrand: flw.card?.type ?? "",
+        paidAt: new Date(),
+      },
+    },
+    { returnDocument: "after" },
+  );
+
+  const settled = claimed ?? (await Payment.findById(payment._id)) ?? payment;
+
+  if (settled.status === "paid") await holdEscrow(settled);
+
+  return settled;
+};
+
+/**
  * Turns a verified transaction into a live plan, exactly once.
  *
  * The claim is a conditional update rather than a read followed by a write: the
@@ -238,9 +297,6 @@ const creditPayment = async (
   payment: PaymentDoc,
   flw: FlwTransaction,
 ): Promise<PaymentDoc> => {
-  if (!payment.tier || !payment.cadence)
-    throw new AppError("That payment is not for a plan.", 400);
-
   if (flw.tx_ref !== payment.reference)
     throw new AppError("That transaction belongs to a different payment.", 400);
 
@@ -264,6 +320,11 @@ const creditPayment = async (
   // tampered checkout worthless, and the reason the amount is never read off a request.
   if (flw.currency !== payment.currency || flw.amount < payment.amount)
     throw new AppError("That payment does not match what was owed.", 400);
+
+  if (payment.kind === "inspection") return creditInspection(payment, flw);
+
+  if (!payment.tier || !payment.cadence)
+    throw new AppError("That payment is not for a plan.", 400);
 
   const now = new Date();
   const subscription = await resolveSubscription(payment.user);
@@ -337,7 +398,74 @@ const settledPayload = async (payment: PaymentDoc, userId: PaymentDoc["user"]) =
   };
 };
 
+/** A plan payment answers with the plan; an inspection payment with the booking. */
+const paidPayload = async (payment: PaymentDoc, userId: PaymentDoc["user"]) => {
+  if (payment.kind !== "inspection") return settledPayload(payment, userId);
+
+  const inspection = await Inspection.findById(payment.inspection);
+
+  return {
+    payment: publicPayment(payment),
+    inspection: inspection && inspectionRecord(inspection),
+  };
+};
+
+const PAID = {
+  inspection: "Payment confirmed. It is held until the viewing is done.",
+  plan: "Payment confirmed. Your plan is active.",
+};
+
 /* ------------------------------------------------------------------ */
+
+/**
+ * A seeker paying for a confirmed viewing. Priced from the fee and commission locked
+ * onto the booking when the realtor confirmed it, never from the request or the
+ * listing as it stands now.
+ */
+export const startInspectionCheckout = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  const { id } = inspectionIdSchema.parse(req.params);
+  const user = req.user!;
+
+  const inspection = await Inspection.findById(id);
+
+  if (!inspection) throw new AppError("No viewing with that id.", 404);
+  if (!inspection.seeker.equals(user._id))
+    throw new AppError("This viewing is not yours.", 403);
+
+  const { escrow } = inspection;
+
+  if (inspection.status !== "confirmed" || escrow.status !== "unpaid")
+    throw new AppError("This viewing has nothing to pay.", 409);
+
+  if (!escrow.payBy || escrow.payBy.getTime() <= Date.now())
+    throw new AppError("The time to pay for this viewing has passed.", 409);
+
+  // One attempt per viewing, for the same reason a plan keeps one: an abandoned
+  // checkout is not a record of anything.
+  await Payment.deleteMany({ inspection: inspection._id, status: "pending" });
+
+  const payment = await Payment.create({
+    user: user._id,
+    kind: "inspection",
+    inspection: inspection._id,
+    amount: escrow.fee + escrow.commission,
+  });
+
+  const link = await createCharge(
+    payment,
+    user,
+    "Inspection fee and service charge",
+    `/dashboard/inspections/${inspection._id}`,
+  );
+
+  res.status(201).json({
+    status: "success",
+    data: { link, reference: payment.reference, amount: payment.amount },
+  });
+};
 
 export const startSubscriptionCheckout = async (
   req: Request,
@@ -367,6 +495,7 @@ export const startSubscriptionCheckout = async (
     payment,
     user,
     `${PLANS[tier].name} plan, billed ${cadence}`,
+    "/realtor/subscription/callback",
   );
 
   res.status(201).json({
@@ -399,7 +528,7 @@ export const verifyPayment = async (req: Request, res: Response): Promise<void> 
       res.status(200).json({
         status: "success",
         message: "That payment is already confirmed.",
-        data: await settledPayload(existing, user._id),
+        data: await paidPayload(existing, user._id),
       });
       return;
     }
@@ -423,8 +552,8 @@ export const verifyPayment = async (req: Request, res: Response): Promise<void> 
 
   res.status(200).json({
     status: "success",
-    message: "Payment confirmed. Your plan is active.",
-    data: await settledPayload(settled, user._id),
+    message: settled.kind === "inspection" ? PAID.inspection : PAID.plan,
+    data: await paidPayload(settled, user._id),
   });
 };
 

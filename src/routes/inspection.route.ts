@@ -11,6 +11,7 @@ import {
   listRealtorInspections,
   rescheduleInspection,
 } from "../controllers/inspection.controller.js";
+import { startInspectionCheckout } from "../controllers/payment.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -65,6 +66,9 @@ router.patch(
   validate(rescheduleSchema),
   rescheduleInspection,
 );
+
+// Every call opens a live transaction at Flutterwave, so it shares the booking cap.
+router.post("/me/:id/pay", restrictTo("seeker"), bookingLimiter, startInspectionCheckout);
 
 router.get("/realtor", restrictTo("realtor"), listRealtorInspections);
 router.get("/realtor/:id", restrictTo("realtor"), getRealtorInspection);

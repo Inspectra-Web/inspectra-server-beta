@@ -24,6 +24,7 @@ import {
   sendInspectionRescheduled,
   type InspectionBrief,
 } from "../services/email.service.js";
+import { priceOnConfirm } from "../services/escrow.service.js";
 import {
   inspectionIdSchema,
   listInspectionsSchema,
@@ -521,6 +522,16 @@ export const decideInspection = async (req: Request, res: Response): Promise<voi
       throw new AppError("This viewing has not happened yet.", 422);
   } else if (inspection.status !== "requested") {
     throw new AppError(`This viewing is already ${inspection.status}.`, 409);
+  }
+
+  if (status === "confirmed") {
+    const listing = await Property.findById(inspection.property).select("inspectionFee");
+
+    if (!priceOnConfirm(inspection, listing?.inspectionFee ?? 0))
+      throw new AppError(
+        "This viewing is too soon for the buyer to pay first. Decline it and ask for a later time.",
+        422,
+      );
   }
 
   inspection.status = status;
