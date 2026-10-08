@@ -48,6 +48,7 @@ const ledgerEntrySchema = new Schema({
         required: [true, "A ledger entry must carry an idempotency key"],
     },
     planbokReference: text(),
+    flwReference: text(),
     inspection: { type: Schema.Types.ObjectId, ref: "Inspection" },
     payment: { type: Schema.Types.ObjectId, ref: "Payment" },
     narration: text(),

@@ -1,7 +1,7 @@
 import { Schema, model } from "mongoose";
 import { CADENCES, TIERS, } from "./subscription.model.js";
 // Exported so the schema's enum and the request validator read the same list.
-export const PAYMENT_KINDS = ["subscription", "certification"];
+export const PAYMENT_KINDS = ["subscription", "certification", "inspection"];
 export const PAYMENT_STATUSES = ["pending", "paid", "failed"];
 const text = () => ({ type: String, trim: true, default: "" });
 const paymentSchema = new Schema({
@@ -37,6 +37,7 @@ const paymentSchema = new Schema({
             message: "{VALUE} is not a valid billing cadence",
         },
     },
+    inspection: { type: Schema.Types.ObjectId, ref: "Inspection" },
     amount: {
         type: Number,
         required: [true, "A payment must carry an amount"],
