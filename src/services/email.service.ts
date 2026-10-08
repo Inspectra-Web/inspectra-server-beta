@@ -702,6 +702,37 @@ export const sendInspectionCancelled = (
     }),
   );
 
+/** To both sides, when a confirmed viewing lapses because the buyer never paid for it. */
+export const sendInspectionUnpaid = (
+  to: string,
+  inspection: InspectionBrief,
+  audience: "seeker" | "realtor",
+): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Viewing cancelled, not paid: ${inspection.property}`,
+      ...layout({
+        eyebrow: "Viewings",
+        preheader: `It was booked for ${when(inspection)}.`,
+        reason: audience === "realtor" ? LISTER_REASON : SEEKER_REASON,
+        blocks: [
+          heading("Viewing cancelled"),
+          lead(
+            audience === "seeker"
+              ? "The inspection fee was not paid in time, so this viewing has been cancelled. You can book it again from the listing."
+              : `${displayName(inspection.person)} did not pay the inspection fee in time, so this viewing has been cancelled and the time is free again.`,
+          ),
+          viewingSlip(inspection, "Cancelled", "disputed"),
+          button(
+            "Open viewing",
+            audience === "realtor" ? realtorLink(inspection) : seekerLink(inspection),
+          ),
+        ],
+      }),
+    }),
+  );
+
 /** What a removed listing took with it, for one buyer. */
 export interface RemovedListingBrief {
   ref: string;

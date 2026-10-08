@@ -250,6 +250,9 @@ inspectionSchema.index(
 inspectionSchema.index({ realtor: 1, status: 1, slot: 1 });
 inspectionSchema.index({ seeker: 1, slot: -1 });
 
+// The escrow sweep's lookup: what has fallen due, by state and deadline.
+inspectionSchema.index({ "escrow.status": 1, "escrow.payBy": 1 });
+
 // Spelled out so an unanswered side still reaches the client as an object.
 const answerOf = (c: Confirmation) => ({ answer: c.answer, at: c.at });
 
