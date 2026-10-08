@@ -11,8 +11,11 @@ import {
  * Certification is the other thing a realtor pays for, and it will run through this
  * same collection when its checkout lands. The union is here now because the admin
  * payments table already speaks it, not because anything writes it yet.
+ *
+ * `inspection` is the one a seeker pays: a viewing fee plus commission, held in
+ * escrow. It is not revenue until released, so a revenue total must leave it out.
  */
-export type PaymentKind = "subscription" | "certification";
+export type PaymentKind = "subscription" | "certification" | "inspection";
 
 /**
  * There is no "canceled". An attempt nobody completed is deleted, not tombstoned:
@@ -23,7 +26,7 @@ export type PaymentKind = "subscription" | "certification";
 export type PaymentStatus = "pending" | "paid" | "failed";
 
 // Exported so the schema's enum and the request validator read the same list.
-export const PAYMENT_KINDS: PaymentKind[] = ["subscription", "certification"];
+export const PAYMENT_KINDS: PaymentKind[] = ["subscription", "certification", "inspection"];
 export const PAYMENT_STATUSES: PaymentStatus[] = ["pending", "paid", "failed"];
 
 export interface IPayment {
@@ -35,6 +38,9 @@ export interface IPayment {
   // Absent on a certification payment, which buys no tier.
   tier?: Tier;
   cadence?: Cadence;
+
+  /** The viewing an `inspection` payment pays for. */
+  inspection?: Types.ObjectId;
 
   /** Naira we asked for, computed from the catalogue and never read off a request. */
   amount: number;
@@ -95,6 +101,7 @@ const paymentSchema = new Schema<IPayment>(
         message: "{VALUE} is not a valid billing cadence",
       },
     },
+    inspection: { type: Schema.Types.ObjectId, ref: "Inspection" },
 
     amount: {
       type: Number,

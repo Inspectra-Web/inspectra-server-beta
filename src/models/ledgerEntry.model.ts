@@ -35,6 +35,8 @@ export interface ILedgerEntry {
   /** One entry per operation, so a retried release cannot post twice. */
   idempotencyKey: string;
   planbokReference: string;
+  /** The Flutterwave transfer or refund that moved escrow money, when one did. */
+  flwReference: string;
   inspection?: Types.ObjectId;
   payment?: Types.ObjectId;
   narration: string;
@@ -83,6 +85,7 @@ const ledgerEntrySchema = new Schema<ILedgerEntry>(
       required: [true, "A ledger entry must carry an idempotency key"],
     },
     planbokReference: text(),
+    flwReference: text(),
     inspection: { type: Schema.Types.ObjectId, ref: "Inspection" },
     payment: { type: Schema.Types.ObjectId, ref: "Payment" },
     narration: text(),

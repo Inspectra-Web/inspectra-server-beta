@@ -38,6 +38,72 @@ export type Party = "seeker" | "realtor";
 
 export const PARTIES: Party[] = ["seeker", "realtor"];
 
+/**
+ * Where a paid viewing's money is. `none` is a free viewing, which never leaves it.
+ * `releasing` and `refunding` are a Flutterwave transfer or refund in flight: the money
+ * has left the escrow book in intent but not yet in fact, so neither may start twice.
+ * `forfeited` is a seeker no-show, kept by INSPECTRA.
+ */
+export type EscrowStatus =
+  | "none"
+  | "unpaid"
+  | "held"
+  | "releasing"
+  | "released"
+  | "refunding"
+  | "refunded"
+  | "forfeited"
+  | "disputed";
+
+export const ESCROW_STATUSES: EscrowStatus[] = [
+  "none",
+  "unpaid",
+  "held",
+  "releasing",
+  "released",
+  "refunding",
+  "refunded",
+  "forfeited",
+  "disputed",
+];
+
+/** A party's answer to the day-after email. `no_show` is the other side not turning up. */
+export type Attendance = "happened" | "no_show";
+
+export const ATTENDANCES: Attendance[] = ["happened", "no_show"];
+
+export type DisputeOutcome = "release" | "refund" | "split";
+
+export const DISPUTE_OUTCOMES: DisputeOutcome[] = ["release", "refund", "split"];
+
+interface Confirmation {
+  answer?: Attendance;
+  at?: Date;
+}
+
+export interface Escrow {
+  status: EscrowStatus;
+  // Whole naira, locked in when the realtor confirms, so editing the listing later
+  // cannot change what this booking costs. The seeker pays fee + commission.
+  fee: number;
+  commission: number;
+  payBy?: Date;
+  paidAt?: Date;
+  payment?: Types.ObjectId;
+  confirmEmailAt?: Date;
+  releaseAt?: Date;
+  realtorAnswer: Confirmation;
+  seekerAnswer: Confirmation;
+  dispute: {
+    reason: string;
+    openedAt?: Date;
+    outcome?: DisputeOutcome;
+    note: string;
+    decidedAt?: Date;
+  };
+  settledAt?: Date;
+}
+
 export interface IInspection {
   property: Types.ObjectId;
   // Copied from property.user when the booking opens, for the same reason an inquiry
@@ -58,6 +124,8 @@ export interface IInspection {
   cancelledBy?: Party;
   decidedAt?: Date;
 
+  escrow: Escrow;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,6 +136,21 @@ const belongsTo = (label: string) => ({
   type: Schema.Types.ObjectId,
   ref: "User",
   required: [true, `An inspection must carry ${label}`] satisfies [boolean, string],
+});
+
+const naira = () => ({
+  type: Number,
+  default: 0,
+  min: [0, "Cannot be negative"] satisfies [number, string],
+  validate: { validator: Number.isInteger, message: "Must be whole naira" },
+});
+
+const confirmation = () => ({
+  answer: {
+    type: String,
+    enum: { values: ATTENDANCES, message: "{VALUE} is not a valid answer" },
+  },
+  at: { type: Date },
 });
 
 const inspectionSchema = new Schema<IInspection>(
@@ -114,6 +197,39 @@ const inspectionSchema = new Schema<IInspection>(
     },
 
     decidedAt: { type: Date },
+
+    escrow: {
+      status: {
+        type: String,
+        enum: { values: ESCROW_STATUSES, message: "{VALUE} is not a valid escrow status" },
+        default: "none",
+      },
+      fee: naira(),
+      commission: naira(),
+      payBy: { type: Date },
+      paidAt: { type: Date },
+      payment: { type: Schema.Types.ObjectId, ref: "Payment" },
+      confirmEmailAt: { type: Date },
+      releaseAt: { type: Date },
+      realtorAnswer: confirmation(),
+      seekerAnswer: confirmation(),
+      dispute: {
+        reason: {
+          type: String,
+          trim: true,
+          default: "",
+          maxLength: [RESPONSE_MAX, `Keep it under ${RESPONSE_MAX} characters`],
+        },
+        openedAt: { type: Date },
+        outcome: {
+          type: String,
+          enum: { values: DISPUTE_OUTCOMES, message: "{VALUE} is not a dispute outcome" },
+        },
+        note: { type: String, trim: true, default: "" },
+        decidedAt: { type: Date },
+      },
+      settledAt: { type: Date },
+    },
   },
   { timestamps: true },
 );
@@ -134,6 +250,9 @@ inspectionSchema.index(
 inspectionSchema.index({ realtor: 1, status: 1, slot: 1 });
 inspectionSchema.index({ seeker: 1, slot: -1 });
 
+// Spelled out so an unanswered side still reaches the client as an object.
+const answerOf = (c: Confirmation) => ({ answer: c.answer, at: c.at });
+
 /**
  * Response allowlist: the schema has no toJSON transform, so shape it here. Both
  * sides read this same record, which is why `cancelledBy` is a party label rather
@@ -148,6 +267,26 @@ export const inspectionRecord = (inspection: InspectionDoc) => ({
   response: inspection.response,
   cancelledBy: inspection.cancelledBy,
   decidedAt: inspection.decidedAt,
+  // The Payment id and the email bookkeeping stay out: neither side acts on them.
+  escrow: {
+    status: inspection.escrow.status,
+    fee: inspection.escrow.fee,
+    commission: inspection.escrow.commission,
+    total: inspection.escrow.fee + inspection.escrow.commission,
+    payBy: inspection.escrow.payBy,
+    paidAt: inspection.escrow.paidAt,
+    releaseAt: inspection.escrow.releaseAt,
+    realtorAnswer: answerOf(inspection.escrow.realtorAnswer),
+    seekerAnswer: answerOf(inspection.escrow.seekerAnswer),
+    dispute: {
+      reason: inspection.escrow.dispute.reason,
+      openedAt: inspection.escrow.dispute.openedAt,
+      outcome: inspection.escrow.dispute.outcome,
+      note: inspection.escrow.dispute.note,
+      decidedAt: inspection.escrow.dispute.decidedAt,
+    },
+    settledAt: inspection.escrow.settledAt,
+  },
   createdAt: inspection.createdAt,
 });
 
