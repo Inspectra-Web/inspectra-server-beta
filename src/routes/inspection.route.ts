@@ -2,6 +2,8 @@ import { Router, type RequestHandler } from "express";
 import rateLimit from "express-rate-limit";
 
 import {
+  answerAsRealtor,
+  answerAsSeeker,
   cancelInspection,
   createInspection,
   decideInspection,
@@ -16,6 +18,7 @@ import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import {
+  attendanceSchema,
   createInspectionSchema,
   decisionSchema,
   rescheduleSchema,
@@ -69,6 +72,20 @@ router.patch(
 
 // Every call opens a live transaction at Flutterwave, so it shares the booking cap.
 router.post("/me/:id/pay", restrictTo("seeker"), bookingLimiter, startInspectionCheckout);
+
+// After a paid viewing, each side says whether it happened.
+router.patch(
+  "/me/:id/attendance",
+  restrictTo("seeker"),
+  validate(attendanceSchema),
+  answerAsSeeker,
+);
+router.patch(
+  "/realtor/:id/attendance",
+  restrictTo("realtor"),
+  validate(attendanceSchema),
+  answerAsRealtor,
+);
 
 router.get("/realtor", restrictTo("realtor"), listRealtorInspections);
 router.get("/realtor/:id", restrictTo("realtor"), getRealtorInspection);

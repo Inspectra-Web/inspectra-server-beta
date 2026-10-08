@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  ATTENDANCES,
   INSPECTION_STATUSES,
   type InspectionStatus,
 } from "../models/inspection.model.js";
@@ -52,6 +53,13 @@ export type CreateInspectionInput = z.infer<typeof createInspectionSchema>;
 export const rescheduleSchema = z.strictObject({ slot });
 
 export type RescheduleInput = z.infer<typeof rescheduleSchema>;
+
+/** One side's answer, after a paid viewing, to whether it happened. */
+export const attendanceSchema = z.strictObject({
+  answer: z.enum(ATTENDANCES, "Say whether the viewing happened"),
+});
+
+export type AttendanceInput = z.infer<typeof attendanceSchema>;
 
 /**
  * What a realtor may do to a booking. Cancelling is not here: either party can do

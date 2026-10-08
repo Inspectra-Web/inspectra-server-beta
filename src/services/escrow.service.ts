@@ -1,12 +1,23 @@
 import { trusted, type QueryFilter } from "mongoose";
 
-import Inspection, { type IInspection, type InspectionDoc } from "../models/inspection.model.js";
+import Inspection, {
+  type Attendance,
+  type IInspection,
+  type InspectionDoc,
+  type Party,
+} from "../models/inspection.model.js";
 import LedgerEntry from "../models/ledgerEntry.model.js";
 import type { PaymentDoc } from "../models/payment.model.js";
 import Property from "../models/property.model.js";
 import User from "../models/user.model.js";
 import VirtualAccount, { type VirtualAccountDoc } from "../models/virtualAccount.model.js";
-import { sendInspectionUnpaid } from "./email.service.js";
+import {
+  sendAttendanceCheck,
+  sendDisputeNotice,
+  sendDisputeOpened,
+  sendInspectionUnpaid,
+  type InspectionBrief,
+} from "./email.service.js";
 
 /** INSPECTRA's commission, added on top of the realtor's fee. Mirrored on the client. */
 export const COMMISSION_RATE = 0.2;
@@ -142,28 +153,158 @@ export const expireUnpaid = async (now = new Date()): Promise<number> => {
     if (!inspection) continue;
     expired += 1;
 
-    const [property, seeker, realtor] = await Promise.all([
-      Property.findById(inspection.property).select("ref title"),
-      User.findById(inspection.seeker).select("email fullname"),
-      User.findById(inspection.realtor).select("email fullname"),
-    ]);
+    const people = await partiesOf(inspection);
+    if (!people) continue;
 
-    if (!property || !seeker || !realtor) continue;
-
-    const brief = (person: string) => ({
-      id: String(inspection._id),
-      ref: property.ref,
-      property: property.title,
-      person,
-      slot: inspection.slot,
-      message: "",
-    });
-
-    sendInspectionUnpaid(seeker.email, brief(realtor.fullname), "seeker");
-    sendInspectionUnpaid(realtor.email, brief(seeker.fullname), "realtor");
+    sendInspectionUnpaid(people.seeker.email, people.about("realtor"), "seeker");
+    sendInspectionUnpaid(people.realtor.email, people.about("seeker"), "realtor");
   }
 
   return expired;
+};
+
+/**
+ * Both people on a booking and the listing, for mail. `about(side)` is the brief a
+ * mail names that side in, so the seeker's copy is about the realtor and vice versa.
+ */
+const partiesOf = async (inspection: InspectionDoc) => {
+  const [property, seeker, realtor] = await Promise.all([
+    Property.findById(inspection.property).select("ref title"),
+    User.findById(inspection.seeker).select("email fullname"),
+    User.findById(inspection.realtor).select("email fullname"),
+  ]);
+
+  if (!property || !seeker || !realtor) return null;
+
+  const about = (side: Party): InspectionBrief => ({
+    id: String(inspection._id),
+    ref: property.ref,
+    property: property.title,
+    person: side === "seeker" ? seeker.fullname : realtor.fullname,
+    slot: inspection.slot,
+    message: "",
+  });
+
+  return { seeker, realtor, about };
+};
+
+/* ------------------------------------------------------------------ *
+ * The day after: both sides say whether the viewing happened.
+ * ------------------------------------------------------------------ */
+
+const AUTO_RELEASE_AFTER = 48 * HOUR;
+// Lagos is UTC+1 all year, so 9am there is 8am UTC.
+const CHECK_HOUR_UTC = 8;
+
+/** 9am Lagos time on the day after the slot, Lagos calendar. */
+export const attendanceCheckAt = (slot: Date): Date => {
+  const lagos = new Date(slot.getTime() + HOUR);
+
+  return new Date(
+    Date.UTC(lagos.getUTCFullYear(), lagos.getUTCMonth(), lagos.getUTCDate() + 1, CHECK_HOUR_UTC),
+  );
+};
+
+/**
+ * Records one side's answer and opens a dispute when the two cannot both be true.
+ * Mutates the document; the caller saves it. A realtor saying it happened also closes
+ * the booking out, which is what "Mark as done" always meant.
+ *
+ * Only disagreement acts here. Agreement, silence and an unanswered no-show are left
+ * `held` for the release and forfeit jobs, which read these same answers.
+ */
+export const recordAttendance = (
+  inspection: InspectionDoc,
+  side: Party,
+  answer: Attendance,
+): string | null => {
+  const { escrow } = inspection;
+  const now = new Date();
+
+  escrow[side === "seeker" ? "seekerAnswer" : "realtorAnswer"] = { answer, at: now };
+
+  if (side === "realtor" && answer === "happened" && inspection.status === "confirmed") {
+    inspection.status = "completed";
+    inspection.decidedAt = now;
+  }
+
+  const seeker = escrow.seekerAnswer.answer;
+  const realtor = escrow.realtorAnswer.answer;
+
+  const reason =
+    seeker === "no_show"
+      ? "The buyer says the realtor did not show up."
+      : realtor === "no_show" && seeker === "happened"
+        ? "The realtor says the buyer did not show up; the buyer says the viewing happened."
+        : null;
+
+  if (reason) {
+    escrow.status = "disputed";
+    escrow.dispute.reason = reason;
+    escrow.dispute.openedAt = now;
+  }
+
+  return reason;
+};
+
+/** Tells the admins and the other side that a dispute has opened. */
+export const announceDispute = async (
+  inspection: InspectionDoc,
+  raisedBy: Party,
+  reason: string,
+): Promise<void> => {
+  const people = await partiesOf(inspection);
+  if (!people) return;
+
+  sendDisputeOpened(people.about("seeker"), reason);
+
+  if (raisedBy === "seeker")
+    sendDisputeNotice(people.realtor.email, people.about("seeker"), "realtor");
+  else sendDisputeNotice(people.seeker.email, people.about("realtor"), "seeker");
+};
+
+/**
+ * Emails both sides of each held viewing once its check time has come, and starts the
+ * 48-hour auto-release clock. A side that has already answered is not asked again.
+ */
+export const sendAttendanceChecks = async (now = new Date()): Promise<number> => {
+  const waiting: QueryFilter<IInspection> = {
+    status: trusted({ $in: ["confirmed", "completed"] }),
+    "escrow.status": "held",
+    "escrow.confirmEmailAt": trusted({ $exists: false }),
+    slot: trusted({ $lte: now }),
+  };
+
+  const candidates = await Inspection.find(waiting).select("_id slot");
+  let sent = 0;
+
+  for (const { _id, slot } of candidates) {
+    if (attendanceCheckAt(slot) > now) continue;
+
+    const inspection = await Inspection.findOneAndUpdate(
+      { ...waiting, _id },
+      {
+        $set: {
+          "escrow.confirmEmailAt": now,
+          "escrow.releaseAt": new Date(now.getTime() + AUTO_RELEASE_AFTER),
+        },
+      },
+      { returnDocument: "after" },
+    );
+
+    if (!inspection) continue;
+    sent += 1;
+
+    const people = await partiesOf(inspection);
+    if (!people) continue;
+
+    if (!inspection.escrow.seekerAnswer.answer)
+      sendAttendanceCheck(people.seeker.email, people.about("realtor"), "seeker");
+    if (!inspection.escrow.realtorAnswer.answer)
+      sendAttendanceCheck(people.realtor.email, people.about("seeker"), "realtor");
+  }
+
+  return sent;
 };
 
 const SWEEP_EVERY = 15 * 60 * 1000;
@@ -177,6 +318,9 @@ const sweep = async (): Promise<void> => {
   try {
     const expired = await expireUnpaid();
     if (expired) console.log(`Escrow sweep: ${expired} unpaid viewing(s) cancelled.`);
+
+    const checked = await sendAttendanceChecks();
+    if (checked) console.log(`Escrow sweep: asked about ${checked} viewing(s).`);
   } catch (error) {
     console.error("Escrow sweep failed:", error);
   } finally {
