@@ -22,6 +22,7 @@ import Property, {
 import PropertyView from "../models/propertyView.model.js";
 import { PLANS } from "../models/subscription.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
+import VirtualAccount from "../models/virtualAccount.model.js";
 import {
   sendListingRemoved,
   sendListingSubmitted,
@@ -504,6 +505,20 @@ const assertListingRoom = async (user: UserDoc): Promise<void> => {
     403,
   );
 };
+
+// A paid viewing releases its fee to the realtor's account, so there has to be one.
+const assertPayoutAccount = async (user: UserDoc, fee?: number): Promise<void> => {
+  if (!fee) return;
+
+  const account = await VirtualAccount.exists({ user: user._id, status: "active" });
+
+  if (!account)
+    throw new AppError(
+      "Open your virtual account before charging an inspection fee.",
+      403,
+    );
+};
+
 export const createProperty = async (req: Request, res: Response): Promise<void> => {
   const body: CreatePropertyInput = req.body;
   const user = req.user!;
@@ -528,6 +543,7 @@ export const createProperty = async (req: Request, res: Response): Promise<void>
   }
 
   await assertListingRoom(user);
+  await assertPayoutAccount(user, body.inspectionFee);
 
   const property = await Property.create({ ...body, user: user._id });
 
@@ -602,6 +618,8 @@ export const updateMyProperty = async (req: Request, res: Response): Promise<voi
     ACTIVE_LISTING_STATUSES.includes(rest.listingStatus);
 
   if (reactivating) await assertListingRoom(req.user!);
+  if (rest.inspectionFee !== property.inspectionFee)
+    await assertPayoutAccount(req.user!, rest.inspectionFee);
 
   Object.assign(property, rest);
   // Merged, not replaced: the form sends only the keys it has, and a land listing
@@ -642,8 +660,11 @@ export const updateMyProperty = async (req: Request, res: Response): Promise<voi
   // Read before sendBackForReview, which modifies the document itself. A listing
   // already pending is still an edit the admin should hear about; it just does not
   // pull a badge on the way.
+  // The fee is the realtor's price for their time, not a fact about the property, so
+  // changing only the fee keeps the badge.
   const changed = property.isModified();
-  const recheck = changed && sendBackForReview(property);
+  const feeOnly = property.modifiedPaths().every((path) => path === "inspectionFee");
+  const recheck = changed && !feeOnly && sendBackForReview(property);
 
   await property.save();
 

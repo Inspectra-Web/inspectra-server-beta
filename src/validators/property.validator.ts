@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  INSPECTION_FEE_MAX,
   LEGAL_DOCUMENT_NAMES,
   LISTING_STATUSES,
   VERIFICATION_STATUSES,
@@ -147,10 +148,15 @@ const propertyObject = z.strictObject({
     "Enter a valid URL",
   ),
   fees: feesSchema,
+  inspectionFee: z
+    .number("Enter the inspection fee")
+    .int("Enter whole naira")
+    .nonnegative("Cannot be negative")
+    .max(INSPECTION_FEE_MAX, "Keep the inspection fee at or under ₦50,000"),
 });
 
 export const createPropertySchema = propertyObject
-  .partial({ features: true, amenities: true, videoUrl: true, fees: true })
+  .partial({ features: true, amenities: true, videoUrl: true, fees: true, inspectionFee: true })
   .superRefine(checkPair);
 
 export type CreatePropertyInput = z.infer<typeof createPropertySchema>;

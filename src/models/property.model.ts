@@ -14,6 +14,9 @@ const TERMS_MAX = 300;
 const IMAGES_MAX = 20;
 const DOCUMENTS_MAX = 5;
 
+// Exported so the listing validator caps the same number.
+export const INSPECTION_FEE_MAX = 50_000;
+
 /** What the listing is offered as, plus the terminal states it retires into. */
 export type ListingStatus =
   | "sale"
@@ -187,6 +190,9 @@ export interface IProperty {
     reviewedAt?: Date;
     reviewedBy?: Types.ObjectId;
   };
+
+  /** Whole naira the realtor earns per viewing. 0 is a free inspection with no payment step. */
+  inspectionFee: number;
 
   fees: {
     paymentTerms: string;
@@ -364,6 +370,17 @@ const propertySchema = new Schema<IProperty>(
       reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
     },
 
+    inspectionFee: {
+      type: Number,
+      default: 0,
+      min: [0, "An inspection fee cannot be negative"],
+      max: [INSPECTION_FEE_MAX, "Keep the inspection fee at or under ₦50,000"],
+      validate: {
+        validator: Number.isInteger,
+        message: "An inspection fee must be whole naira",
+      },
+    },
+
     // The transparency promise: every naira beyond the asking price, in writing.
     fees: {
       paymentTerms: {
@@ -497,6 +514,7 @@ export const detailedProperty = (property: PropertyDoc) => ({
     note: property.verification.note,
     reviewedAt: property.verification.reviewedAt,
   },
+  inspectionFee: property.inspectionFee,
   fees: {
     paymentTerms: property.fees.paymentTerms,
     refundPolicy: property.fees.refundPolicy,
@@ -535,6 +553,7 @@ export const publicProperty = (property: PropertyDoc) => ({
   documents: property.documents.map((doc) => ({ name: doc.name, status: doc.status })),
   status: property.verification.status,
   verifiedOn: property.verification.reviewedAt,
+  inspectionFee: property.inspectionFee,
   fees: {
     paymentTerms: property.fees.paymentTerms,
     refundPolicy: property.fees.refundPolicy,
