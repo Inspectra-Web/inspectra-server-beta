@@ -10,6 +10,7 @@ import Property, { ACTIVE_LISTING_STATUSES, detailedProperty, publicProperty, } 
 import PropertyView from "../models/propertyView.model.js";
 import { PLANS } from "../models/subscription.model.js";
 import User from "../models/user.model.js";
+import VirtualAccount from "../models/virtualAccount.model.js";
 import { sendListingRemoved, sendListingSubmitted, sendListingUpdated, } from "../services/email.service.js";
 import { ensureProfile, listingEligibility } from "../services/profile.service.js";
 import { entitlements, listingAllowance, resolveSubscription, } from "../services/subscription.service.js";
@@ -373,6 +374,14 @@ const assertListingRoom = async (user) => {
     throw new AppError(`You have used all ${limit} listing${limit === 1 ? "" : "s"} on your ${plan} plan. ` +
         `Upgrade, or mark a listing sold, to add another.`, 403);
 };
+// A paid viewing releases its fee to the realtor's account, so there has to be one.
+const assertPayoutAccount = async (user, fee) => {
+    if (!fee)
+        return;
+    const account = await VirtualAccount.exists({ user: user._id, status: "active" });
+    if (!account)
+        throw new AppError("Open your virtual account before charging an inspection fee.", 403);
+};
 export const createProperty = async (req, res) => {
     const body = req.body;
     const user = req.user;
@@ -391,6 +400,7 @@ export const createProperty = async (req, res) => {
         throw new AppError(`You need ${needs} before you can list a property.`, 403);
     }
     await assertListingRoom(user);
+    await assertPayoutAccount(user, body.inspectionFee);
     const property = await Property.create({ ...body, user: user._id });
     sendListingSubmitted(listingBrief(property, user.fullname));
     res.status(201).json({
@@ -448,6 +458,8 @@ export const updateMyProperty = async (req, res) => {
         ACTIVE_LISTING_STATUSES.includes(rest.listingStatus);
     if (reactivating)
         await assertListingRoom(req.user);
+    if (rest.inspectionFee !== property.inspectionFee)
+        await assertPayoutAccount(req.user, rest.inspectionFee);
     Object.assign(property, rest);
     // Merged, not replaced: the form sends only the keys it has, and a land listing
     // sends almost none. Replacing would reset the rest to 0.
@@ -479,8 +491,11 @@ export const updateMyProperty = async (req, res) => {
     // Read before sendBackForReview, which modifies the document itself. A listing
     // already pending is still an edit the admin should hear about; it just does not
     // pull a badge on the way.
+    // The fee is the realtor's price for their time, not a fact about the property, so
+    // changing only the fee keeps the badge.
     const changed = property.isModified();
-    const recheck = changed && sendBackForReview(property);
+    const feeOnly = property.modifiedPaths().every((path) => path === "inspectionFee");
+    const recheck = changed && !feeOnly && sendBackForReview(property);
     await property.save();
     if (changed)
         sendListingUpdated(listingBrief(property, req.user.fullname), recheck);

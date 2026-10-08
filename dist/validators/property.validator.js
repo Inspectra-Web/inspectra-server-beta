@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { LEGAL_DOCUMENT_NAMES, LISTING_STATUSES, VERIFICATION_STATUSES, } from "../models/property.model.js";
+import { INSPECTION_FEE_MAX, LEGAL_DOCUMENT_NAMES, LISTING_STATUSES, VERIFICATION_STATUSES, } from "../models/property.model.js";
 import { PROPERTY_CATEGORIES, PROPERTY_TYPES, PROPERTY_TYPES_BY_CATEGORY, } from "../types/property.type.js";
 // Mirrors client/src/lib/listingSchema.ts so the two ends agree on the rules.
 const TITLE_MIN = 4;
@@ -113,9 +113,14 @@ const propertyObject = z.strictObject({
         .max(AMENITIES_MAX, `Pick at most ${AMENITIES_MAX} amenities`),
     videoUrl: line.refine((value) => value === "" || /^https?:\/\/.+/.test(value), "Enter a valid URL"),
     fees: feesSchema,
+    inspectionFee: z
+        .number("Enter the inspection fee")
+        .int("Enter whole naira")
+        .nonnegative("Cannot be negative")
+        .max(INSPECTION_FEE_MAX, "Keep the inspection fee at or under ₦50,000"),
 });
 export const createPropertySchema = propertyObject
-    .partial({ features: true, amenities: true, videoUrl: true, fees: true })
+    .partial({ features: true, amenities: true, videoUrl: true, fees: true, inspectionFee: true })
     .superRefine(checkPair);
 /**
  * `images` and `documents` are keep-lists, not uploads: what the composer still wants.
