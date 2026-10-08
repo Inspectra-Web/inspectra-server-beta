@@ -2,10 +2,12 @@ import express from "express";
 import appConfig from "./config/app.config.js";
 import dbConfig from "./config/db.config.js";
 import envConfig from "./config/env.config.js";
+import { startEscrowSweep } from "./services/escrow.service.js";
 const app = express();
 const port = Number(envConfig.PORT);
 appConfig(app);
 await dbConfig();
+startEscrowSweep();
 const server = app.listen(port, () => {
     console.log(`Server is listening to PORT: ${port}`);
 });

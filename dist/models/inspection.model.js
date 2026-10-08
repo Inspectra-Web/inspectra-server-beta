@@ -128,6 +128,8 @@ inspectionSchema.index({ property: 1, seeker: 1 }, { unique: true, partialFilter
 // The two queues: the realtor's diary, and the buyer's own bookings.
 inspectionSchema.index({ realtor: 1, status: 1, slot: 1 });
 inspectionSchema.index({ seeker: 1, slot: -1 });
+// The escrow sweep's lookup: what has fallen due, by state and deadline.
+inspectionSchema.index({ "escrow.status": 1, "escrow.payBy": 1 });
 // Spelled out so an unanswered side still reaches the client as an object.
 const answerOf = (c) => ({ answer: c.answer, at: c.at });
 /**
