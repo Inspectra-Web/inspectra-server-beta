@@ -1181,7 +1181,7 @@ export const getRealtorVirtualAccount = async (req: Request, res: Response): Pro
   const account = await VirtualAccount.findOne({ user: realtor._id });
 
   const balance =
-    account?.status === "active" && account.planbokId ? await getBalance(account.planbokId) : null;
+    account?.status === "active" && account.planbokId ? await getBalance(account.planbokId, realtor.email) : null;
 
   res.status(200).json({
     status: "success",

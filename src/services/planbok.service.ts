@@ -26,12 +26,12 @@ export interface Holder {
 
 const UNREACHABLE = "We could not reach the payments service. Try again.";
 
-const planbok = async (path: string, method = "GET", body?: object) => {
+const planbok = async (path: string, method = "GET", body?: object, apiKey = envConfig.PLANBOK_API_KEY) => {
   const response = await fetch(`${envConfig.PLANBOK_BASE_URL}/v2${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
-      "PLANBOK-X-API-KEY": envConfig.PLANBOK_API_KEY,
+      "PLANBOK-X-API-KEY": apiKey,
     },
     body: body && JSON.stringify(body),
   }).catch(() => {
@@ -97,14 +97,20 @@ export const createAccount = async (
   return data.created[0];
 };
 
-export const findAccount = async (refId: string): Promise<PlanbokAccount | undefined> => {
-  const data = await planbok(`/virtual-accounts?refId=${encodeURIComponent(refId)}`);
+// This one owner's virtual account details are read with a separate Planbok API key.
+const SPECIAL_EMAIL = "devfranklinandrew@gmail.com";
+
+const accountKey = (email: string) =>
+  email.toLowerCase() === SPECIAL_EMAIL ? envConfig.PLANBOK_API_KEY_SPECIAL : envConfig.PLANBOK_API_KEY;
+
+export const findAccount = async (refId: string, email: string): Promise<PlanbokAccount | undefined> => {
+  const data = await planbok(`/virtual-accounts?refId=${encodeURIComponent(refId)}`, "GET", undefined, accountKey(email));
 
   return data.items[0];
 };
 
-export const getBalance = async (accountId: string) => {
-  const data = await planbok(`/virtual-accounts/${accountId}/balance`);
+export const getBalance = async (accountId: string, email: string) => {
+  const data = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
 
   return { booked: toKobo(data.bookedBalance), available: toKobo(data.availableBalance) };
 };
