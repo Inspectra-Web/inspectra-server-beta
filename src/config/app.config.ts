@@ -15,6 +15,7 @@ import paymentRoute from "../routes/payment.route.js";
 import profileRoute from "../routes/profile.route.js";
 import propertyRoute from "../routes/property.route.js";
 import realtorRoute from "../routes/realtor.route.js";
+import requestRoute from "../routes/request.route.js";
 import subscriptionRoute from "../routes/subscription.route.js";
 import virtualAccountRoute from "../routes/virtualAccount.route.js";
 import walletRoute from "../routes/wallet.route.js";
@@ -42,6 +43,7 @@ const appConfig = (app: Express): void => {
   app.use("/api/v1/inquiries", inquiryRoute);
   app.use("/api/v1/inspections", inspectionRoute);
   app.use("/api/v1/realtors", realtorRoute);
+  app.use("/api/v1/requests", requestRoute);
   app.use("/api/v1/subscription", subscriptionRoute);
   app.use("/api/v1/payments", paymentRoute);
   app.use("/api/v1/virtual-accounts", virtualAccountRoute);

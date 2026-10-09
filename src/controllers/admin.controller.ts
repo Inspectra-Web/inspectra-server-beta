@@ -16,6 +16,11 @@ import Property, {
   type ListingStatus,
   type VerificationStatus,
 } from "../models/property.model.js";
+import PropertyRequest, {
+  type RequestCity,
+  type RequestIntent,
+  type RequestTimeline,
+} from "../models/request.model.js";
 import Payment, {
   type PaymentDoc,
   type PaymentStatus,
@@ -33,7 +38,11 @@ import VirtualAccount, {
   type AccountStatus,
 } from "../models/virtualAccount.model.js";
 import Wallet, { publicWallet, type WalletStatus } from "../models/wallet.model.js";
-import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
+import {
+  requestRef,
+  sendAccountStatus,
+  sendListingReviewed,
+} from "../services/email.service.js";
 import { decideDispute } from "../services/escrow.service.js";
 import { getBalance, getWalletBalances } from "../services/planbok.service.js";
 import {
@@ -48,6 +57,7 @@ import {
   listDisputesSchema,
   listListingsSchema,
   listRealtorsSchema,
+  listRequestsSchema,
   listingIdSchema,
   listUsersSchema,
   listVirtualAccountsSchema,
@@ -55,6 +65,7 @@ import {
   userIdSchema,
   type DecideDisputeInput,
   type DisputeState,
+  type RequestState,
   type ReviewListingInput,
   type UserStatusInput,
 } from "../validators/admin.validator.js";
@@ -1508,5 +1519,299 @@ export const decideDisputeHandler = async (req: Request, res: Response): Promise
     status: "success",
     message: "Decision recorded. Both sides have been told.",
     data: await disputeDetail(decided),
+  });
+};
+
+/* ------------------------------------------------------------------ *
+ * Property requests: the seeker waitlist, as a queue to contact and as
+ * the demand figures the realtor pitch is built on.
+ * ------------------------------------------------------------------ */
+
+/** Closed wins over expired: a seeker who found a place is not "still waiting". */
+const requestState = {
+  $switch: {
+    branches: [
+      { case: { $eq: ["$status", "closed"] }, then: "closed" },
+      { case: { $lte: ["$expiresAt", "$$NOW"] }, then: "expired" },
+    ],
+    default: "live",
+  },
+};
+
+/** Grouped counts as one object keyed by value, the shape every pill row reads. */
+const tally = <K extends string>(groups: { _id: K; count: number }[] = []) =>
+  Object.fromEntries(groups.map((group) => [group._id, group.count])) as Partial<
+    Record<K, number>
+  >;
+
+interface RequestRow {
+  _id: Types.ObjectId;
+  intent: RequestIntent;
+  category: string;
+  type?: string;
+  city: RequestCity;
+  areas: string[];
+  budgetMin?: number;
+  budgetMax: number;
+  bedrooms?: number;
+  timeline: RequestTimeline;
+  notes: string;
+  state: RequestState;
+  expiresAt: Date;
+  createdAt: Date;
+  seeker: Pick<IUser, "fullname" | "email" | "phone" | "avatar" | "emailVerified"> & {
+    _id: Types.ObjectId;
+  };
+  whatsapp: string;
+  contactMeans: string;
+}
+
+interface RequestPage {
+  rows: RequestRow[];
+  total: { count: number }[];
+  states: { _id: RequestState; count: number }[];
+  cities: { _id: RequestCity; count: number }[];
+  intents: { _id: RequestIntent; count: number }[];
+}
+
+const requestRow = (row: RequestRow) => ({
+  id: row._id,
+  ref: requestRef(String(row._id)),
+  intent: row.intent,
+  category: row.category,
+  type: row.type,
+  city: row.city,
+  areas: row.areas,
+  budgetMin: row.budgetMin,
+  budgetMax: row.budgetMax,
+  bedrooms: row.bedrooms,
+  timeline: row.timeline,
+  notes: row.notes,
+  state: row.state,
+  expiresAt: row.expiresAt,
+  createdAt: row.createdAt,
+  // Contact details are the point of this list: the seeker consented to be reached
+  // about matching homes, and this is where the admin reaches them from.
+  seeker: {
+    id: row.seeker._id,
+    fullname: row.seeker.fullname,
+    email: row.seeker.email,
+    phone: row.seeker.phone ?? "",
+    whatsapp: row.whatsapp,
+    contactMeans: row.contactMeans,
+    avatar: row.seeker.avatar,
+    verified: row.seeker.emailVerified,
+  },
+});
+
+export const listRequests = async (req: Request, res: Response): Promise<void> => {
+  const { q, state, city, intent, page, limit } = listRequestsSchema.parse(req.query);
+
+  // Every filter here is also a count dimension, so the count branches carry none of
+  // them: choosing Lagos must not zero the Abuja pill it was chosen beside.
+  const filters: PipelineStage.FacetPipelineStage[] = [];
+  if (state !== "all") filters.push({ $match: { state } });
+  if (city !== "all") filters.push({ $match: { city } });
+  if (intent !== "all") filters.push({ $match: { intent } });
+
+  const pipeline: PipelineStage[] = [
+    { $addFields: { state: requestState } },
+    { $lookup: { from: "users", localField: "seeker", foreignField: "_id", as: "seeker" } },
+    // A request whose account is gone has nobody to notify, so it drops out.
+    { $unwind: "$seeker" },
+    {
+      $lookup: {
+        from: "profiles",
+        localField: "seeker._id",
+        foreignField: "user",
+        as: "profile",
+      },
+    },
+    { $unwind: { path: "$profile", preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        whatsapp: { $ifNull: ["$profile.whatsapp", ""] },
+        contactMeans: { $ifNull: ["$profile.contactMeans", ""] },
+      },
+    },
+  ];
+
+  if (q) {
+    const pattern = new RegExp(escapeRegex(q), "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { "seeker.fullname": pattern },
+          { "seeker.email": pattern },
+          { "seeker.phone": pattern },
+          { areas: pattern },
+        ],
+      },
+    });
+  }
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...filters,
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        {
+          $project: {
+            intent: 1,
+            category: 1,
+            type: 1,
+            city: 1,
+            areas: 1,
+            budgetMin: 1,
+            budgetMax: 1,
+            bedrooms: 1,
+            timeline: 1,
+            notes: 1,
+            state: 1,
+            expiresAt: 1,
+            createdAt: 1,
+            whatsapp: 1,
+            contactMeans: 1,
+            "seeker._id": 1,
+            "seeker.fullname": 1,
+            "seeker.email": 1,
+            "seeker.phone": 1,
+            "seeker.avatar": 1,
+            "seeker.emailVerified": 1,
+          },
+        },
+      ],
+      total: [...filters, { $count: "count" }],
+      states: [{ $group: { _id: "$state", count: { $sum: 1 } } }],
+      cities: [{ $group: { _id: "$city", count: { $sum: 1 } } }],
+      intents: [{ $group: { _id: "$intent", count: { $sum: 1 } } }],
+    },
+  });
+
+  const [result] = await PropertyRequest.aggregate<RequestPage>(pipeline);
+
+  const total = result?.total[0]?.count ?? 0;
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      requests: (result?.rows ?? []).map(requestRow),
+      counts: {
+        states: tally(result?.states),
+        cities: tally(result?.cities),
+        intents: tally(result?.intents),
+      },
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+interface DemandResult {
+  totals: { requests: number; seekers: number }[];
+  cities: { _id: RequestCity; count: number }[];
+  intents: { _id: RequestIntent; count: number }[];
+  timelines: { _id: RequestTimeline; count: number }[];
+  segments: {
+    _id: { city: RequestCity; intent: RequestIntent; kind: string };
+    count: number;
+    budgetMedian: number;
+    budgetLow: number;
+    budgetHigh: number;
+  }[];
+  areas: { _id: { city: RequestCity; key: string }; name: string; count: number }[];
+}
+
+const SEGMENTS_MAX = 50;
+const DEMAND_AREAS_MAX = 20;
+
+/**
+ * The figures a realtor is pitched with, so they count only demand that is real today:
+ * live requests from seekers who verified their email and are not suspended. Budgets
+ * are the stated maximum, summarised per segment; a segment shares one intent, so its
+ * budgets share one period (a year, a night or a total).
+ */
+export const getRequestDemand = async (_req: Request, res: Response): Promise<void> => {
+  const [result] = await PropertyRequest.aggregate<DemandResult>([
+    { $match: { status: "active", $expr: { $gt: ["$expiresAt", "$$NOW"] } } },
+    { $lookup: { from: "users", localField: "seeker", foreignField: "_id", as: "seeker" } },
+    { $unwind: "$seeker" },
+    { $match: { "seeker.emailVerified": true, "seeker.status": "active" } },
+    {
+      $facet: {
+        totals: [
+          {
+            $group: {
+              _id: null,
+              requests: { $sum: 1 },
+              seekers: { $addToSet: "$seeker._id" },
+            },
+          },
+          { $project: { _id: 0, requests: 1, seekers: { $size: "$seekers" } } },
+        ],
+        cities: [{ $group: { _id: "$city", count: { $sum: 1 } } }],
+        intents: [{ $group: { _id: "$intent", count: { $sum: 1 } } }],
+        timelines: [{ $group: { _id: "$timeline", count: { $sum: 1 } } }],
+        segments: [
+          {
+            $group: {
+              _id: {
+                city: "$city",
+                intent: "$intent",
+                kind: { $ifNull: ["$type", "$category"] },
+              },
+              count: { $sum: 1 },
+              budgetMedian: { $median: { input: "$budgetMax", method: "approximate" } },
+              budgetLow: { $min: "$budgetMax" },
+              budgetHigh: { $max: "$budgetMax" },
+            },
+          },
+          { $sort: { count: -1, "_id.city": 1, "_id.intent": 1, "_id.kind": 1 } },
+          { $limit: SEGMENTS_MAX },
+        ],
+        // Case-folded so "Lekki" and "lekki" are one area; the first spelling is shown.
+        areas: [
+          { $unwind: "$areas" },
+          {
+            $group: {
+              _id: { city: "$city", key: { $toLower: "$areas" } },
+              name: { $first: "$areas" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { count: -1, "_id.key": 1 } },
+          { $limit: DEMAND_AREAS_MAX },
+        ],
+      },
+    },
+  ]);
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      requests: result?.totals[0]?.requests ?? 0,
+      seekers: result?.totals[0]?.seekers ?? 0,
+      cities: tally(result?.cities),
+      intents: tally(result?.intents),
+      timelines: tally(result?.timelines),
+      segments: (result?.segments ?? []).map((segment) => ({
+        city: segment._id.city,
+        intent: segment._id.intent,
+        kind: segment._id.kind,
+        count: segment.count,
+        budgetMedian: segment.budgetMedian,
+        budgetLow: segment.budgetLow,
+        budgetHigh: segment.budgetHigh,
+      })),
+      areas: (result?.areas ?? []).map((area) => ({
+        city: area._id.city,
+        name: area.name,
+        count: area.count,
+      })),
+    },
   });
 };

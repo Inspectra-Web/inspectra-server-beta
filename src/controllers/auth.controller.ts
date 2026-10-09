@@ -22,24 +22,43 @@ import type {
   VerifyTokenInput,
 } from "../validators/auth.validator.js";
 
-export const register = async (req: Request, res: Response): Promise<void> => {
-  const { fullname, email, password, role }: RegisterInput = req.body;
+interface NewAccount {
+  fullname: string;
+  email: string;
+  password: string;
+  role: "seeker" | "realtor";
+  phone?: string;
+}
 
-  const user = new User({ fullname, email, password, role });
+/**
+ * The account and its profile, without the verification send: the waitlist join writes
+ * a request in between, so the caller mails once everything it needs is saved.
+ */
+export const createAccount = async (input: NewAccount) => {
+  const user = new User(input);
   const verifyToken = user.createEmailVerifyToken();
 
   await user.save();
 
-  await ensureProfile(user);
+  const profile = await ensureProfile(user);
 
   // Ahead of the verification send: if that fails the account still exists.
   if (user.role === "realtor")
     sendRealtorJoined({ id: String(user._id), name: user.fullname, email: user.email });
 
-  await sendVerifyEmail(
-    user.email,
-    `${envConfig.CLIENT_URL}/verify-email?token=${verifyToken}`,
-  );
+  return {
+    user,
+    profile,
+    verifyUrl: `${envConfig.CLIENT_URL}/verify-email?token=${verifyToken}`,
+  };
+};
+
+export const register = async (req: Request, res: Response): Promise<void> => {
+  const { fullname, email, password, role }: RegisterInput = req.body;
+
+  const { user, verifyUrl } = await createAccount({ fullname, email, password, role });
+
+  await sendVerifyEmail(user.email, verifyUrl);
 
   res.status(201).json({
     status: "success",

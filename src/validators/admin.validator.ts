@@ -6,6 +6,7 @@ import {
   type VerificationStatus,
 } from "../models/property.model.js";
 import { DISPUTE_OUTCOMES } from "../models/inspection.model.js";
+import { REQUEST_CITIES, REQUEST_INTENTS } from "../models/request.model.js";
 import { ACCOUNT_STATUSES } from "../models/virtualAccount.model.js";
 import { WALLET_STATUSES } from "../models/wallet.model.js";
 
@@ -208,3 +209,27 @@ export const decideDisputeSchema = z
   });
 
 export type DecideDisputeInput = z.infer<typeof decideDisputeSchema>;
+
+/**
+ * Where a request stands, derived on read: `live` is active and unexpired. The admin
+ * list opens on it, because that is the demand a realtor would actually be meeting.
+ */
+export type RequestState = "live" | "expired" | "closed";
+
+export const REQUEST_STATES: RequestState[] = ["live", "expired", "closed"];
+
+export const listRequestsSchema = z.object({
+  q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+  state: z.enum(["all", ...REQUEST_STATES]).default("live"),
+  city: z.enum(["all", ...REQUEST_CITIES]).default("all"),
+  intent: z.enum(["all", ...REQUEST_INTENTS]).default("all"),
+  page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+    .default(PAGE_SIZE),
+});
+
+export type ListRequestsQuery = z.infer<typeof listRequestsSchema>;

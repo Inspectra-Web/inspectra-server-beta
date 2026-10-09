@@ -13,9 +13,11 @@ import {
   getRealtorVirtualAccount,
   getRealtorWallet,
   getRealtorWalletBalances,
+  getRequestDemand,
   listDisputes,
   listPayments,
   listRealtors,
+  listRequests,
   listUsers,
   listVirtualAccounts,
   listWallets,
@@ -62,6 +64,9 @@ router.get("/payments", protect, restrictTo("admin"), listPayments);
 router.get("/virtual-accounts", protect, restrictTo("admin"), listVirtualAccounts);
 
 router.get("/wallets", protect, restrictTo("admin"), listWallets);
+
+router.get("/requests", protect, restrictTo("admin"), listRequests);
+router.get("/requests/demand", protect, restrictTo("admin"), getRequestDemand);
 
 router.get("/disputes", protect, restrictTo("admin"), listDisputes);
 router.get("/disputes/:id", protect, restrictTo("admin"), getDispute);

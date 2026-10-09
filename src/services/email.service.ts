@@ -3,6 +3,11 @@ import { Resend } from "resend";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import type { Escrow } from "../models/inspection.model.js";
+import type {
+  RequestCity,
+  RequestIntent,
+  RequestTimeline,
+} from "../models/request.model.js";
 import User from "../models/user.model.js";
 import {
   button,
@@ -43,7 +48,7 @@ const sendEmail = async ({ to, subject, html, text }: EmailOptions): Promise<voi
 /** Names are stored lowercased, so title-case them as the client does: "ada obi" -> "Ada Obi". */
 const displayName = (fullname: string): string =>
   fullname
-    .split(/s+/)
+    .split(/\s+/)
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
@@ -90,7 +95,7 @@ export const sendResetEmail = (to: string, url: string): Promise<void> =>
 /**
  * After the address is confirmed, so it only reaches someone who can sign in. A
  * realtor's next step is the identity check that stands between them and a listing;
- * a seeker's is the marketplace.
+ * a seeker's is the requests they filed for the waitlist.
  */
 export const sendWelcome = (to: string, role: "seeker" | "realtor"): void =>
   notify(to, () =>
@@ -102,7 +107,7 @@ export const sendWelcome = (to: string, role: "seeker" | "realtor"): void =>
         preheader:
           role === "realtor"
             ? "Your email is confirmed. Verify your identity to start listing."
-            : "Your email is confirmed. Every listing here shows its verification status.",
+            : "Your email is confirmed. You're on the waitlist for verified homes.",
         reason: ACCOUNT_REASON,
         blocks:
           role === "realtor"
@@ -116,9 +121,9 @@ export const sendWelcome = (to: string, role: "seeker" | "realtor"): void =>
             : [
                 heading("Welcome to INSPECTRA"),
                 lead(
-                  "Your email is confirmed. Every listing here carries its verification status, so you can see what has been checked before you book a viewing.",
+                  "Your email is confirmed, so your property requests are active. We'll let you know when verified homes that match them go live.",
                 ),
-                button("Browse listings", `${envConfig.CLIENT_URL}/listings`),
+                button("View your requests", `${envConfig.CLIENT_URL}/dashboard/requests`),
               ],
       }),
     }),
@@ -1075,6 +1080,112 @@ export const sendVirtualAccountOpened = (to: string, account: VirtualAccountBrie
             ["Bank", account.bankName],
           ]),
           button("View account", `${envConfig.CLIENT_URL}/realtor/virtual-account`),
+        ],
+      }),
+    }),
+  );
+
+/* ------------------------------------------------------------------ *
+ * Property requests: the seeker waitlist. Nothing is listed yet, so the
+ * only promise these make is a notification when matching homes go live.
+ * ------------------------------------------------------------------ */
+
+const INTENT_LABELS: Record<RequestIntent, string> = {
+  rent: "Rent",
+  sale: "Buy",
+  lease: "Lease",
+  shortlet: "Shortlet",
+};
+
+const BUDGET_PERIODS: Record<RequestIntent, string> = {
+  rent: " a year",
+  sale: "",
+  lease: " a year",
+  shortlet: " a night",
+};
+
+const CITY_LABELS: Record<RequestCity, string> = {
+  lagos: "Lagos",
+  "port-harcourt": "Port Harcourt",
+  abuja: "Abuja",
+};
+
+const TIMELINE_LABELS: Record<RequestTimeline, string> = {
+  now: "As soon as possible",
+  "3-months": "Within 3 months",
+  "6-months": "Within 6 months",
+  exploring: "Just exploring",
+};
+
+/** "self-contained" -> "Self contained". The client owns the real labels; this is close enough for mail. */
+const slugLabel = (slug: string): string =>
+  slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, " ");
+
+/** What an email says about a request: the whole brief, so the seeker can check it. */
+export interface RequestBrief {
+  id: string;
+  intent: RequestIntent;
+  category: string;
+  type?: string;
+  city: RequestCity;
+  areas: string[];
+  budgetMin?: number;
+  budgetMax: number;
+  bedrooms?: number;
+  timeline: RequestTimeline;
+}
+
+export const requestRef = (id: string): string => `REQ-${id.slice(-6).toUpperCase()}`;
+
+const requestRows = (request: RequestBrief): Block => {
+  const budget =
+    request.budgetMin != null
+      ? `${naira.format(request.budgetMin)} to ${naira.format(request.budgetMax)}`
+      : `Up to ${naira.format(request.budgetMax)}`;
+
+  const pairs: [string, string][] = [
+    ["Looking to", INTENT_LABELS[request.intent]],
+    ["Property", slugLabel(request.type ?? request.category)],
+    ["City", CITY_LABELS[request.city]],
+  ];
+
+  if (request.areas.length) pairs.push(["Areas", request.areas.join(", ")]);
+  if (request.bedrooms != null) pairs.push(["Bedrooms", `${request.bedrooms}+`]);
+  pairs.push(["Budget", `${budget}${BUDGET_PERIODS[request.intent]}`]);
+  pairs.push(["When", TIMELINE_LABELS[request.timeline]]);
+
+  return rows(pairs);
+};
+
+const REQUEST_REASON =
+  "You're getting this because you asked INSPECTRA to tell you about matching homes.";
+
+/** To the seeker, when a request is filed. */
+export const sendRequestReceived = (to: string, request: RequestBrief): void =>
+  notify(requestRef(request.id), () =>
+    sendEmail({
+      to,
+      subject: "You're on the INSPECTRA waitlist",
+      ...layout({
+        eyebrow: "Waitlist",
+        preheader: "We'll tell you when verified homes matching your request go live.",
+        reason: REQUEST_REASON,
+        blocks: [
+          heading("Your request is in"),
+          lead(
+            "INSPECTRA is not listing homes yet. When verified properties that match this request go live, you'll be among the first to hear.",
+          ),
+          slip({
+            ref: requestRef(request.id),
+            status: "Active",
+            tone: "neutral",
+            title: `${INTENT_LABELS[request.intent]} in ${CITY_LABELS[request.city]}`,
+          }),
+          requestRows(request),
+          note(
+            "Requests stay active for 90 days. We'll check in before then to ask if you're still looking.",
+          ),
+          button("View your requests", `${envConfig.CLIENT_URL}/dashboard/requests`),
         ],
       }),
     }),
