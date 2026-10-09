@@ -556,6 +556,39 @@ export const sendDisputeNotice = (to, inspection, audience) => notify(inspection
         ],
     }),
 }));
+/** To each side, once an admin has decided a dispute and the money is moving. */
+export const sendDisputeDecided = (to, inspection, audience, escrow) => notify(inspection.ref, () => {
+    const naira = (n) => `₦${n.toLocaleString("en-NG")}`;
+    const other = displayName(inspection.person);
+    const toRealtor = escrow.releaseAmount ?? escrow.fee;
+    const toSeeker = escrow.refundAmount ?? escrow.fee + escrow.commission;
+    const outcome = escrow.dispute.outcome === "release"
+        ? audience === "realtor"
+            ? `The ${naira(escrow.fee)} inspection fee is being paid to you.`
+            : `The inspection fee is being paid to ${other}.`
+        : escrow.dispute.outcome === "refund"
+            ? audience === "seeker"
+                ? `You are being refunded ${naira(toSeeker)} in full.`
+                : `${other} is being refunded in full.`
+            : audience === "realtor"
+                ? `${naira(toRealtor)} is being paid to you and ${naira(toSeeker)} refunded to ${other}.`
+                : `${naira(toSeeker)} is being refunded to you and ${naira(toRealtor)} paid to ${other}.`;
+    return sendEmail({
+        to,
+        subject: `Viewing review decided: ${inspection.property}`,
+        ...layout({
+            eyebrow: "Viewings",
+            preheader: outcome,
+            reason: audience === "realtor" ? LISTER_REASON : SEEKER_REASON,
+            blocks: [
+                heading("We've reviewed this viewing"),
+                lead(`${outcome}${escrow.dispute.note ? ` Reviewer's note: ${escrow.dispute.note}` : ""}`),
+                viewingSlip(inspection, "Decided", "verified"),
+                button("Open viewing", audience === "realtor" ? realtorLink(inspection) : seekerLink(inspection)),
+            ],
+        }),
+    });
+});
 /** To every admin, when a paid viewing's two sides disagree about what happened. */
 export const sendDisputeOpened = (inspection, reason) => notify(inspection.ref, async () => {
     const to = await adminEmails();

@@ -5,7 +5,7 @@ import Payment from "../models/payment.model.js";
 import Property from "../models/property.model.js";
 import User from "../models/user.model.js";
 import VirtualAccount from "../models/virtualAccount.model.js";
-import { sendAttendanceCheck, sendDisputeNotice, sendDisputeOpened, sendFeeReleased, sendInspectionUnpaid, sendRefundIssued, sendViewingForfeited, } from "./email.service.js";
+import { sendAttendanceCheck, sendDisputeDecided, sendDisputeNotice, sendDisputeOpened, sendFeeReleased, sendInspectionUnpaid, sendRefundIssued, sendViewingForfeited, } from "./email.service.js";
 import { createRefund, createTransfer, getRefund, getTransfer, refundDone, TransferRejected, } from "./flutterwave.service.js";
 /** INSPECTRA's commission, added on top of the realtor's fee. Mirrored on the client. */
 export const COMMISSION_RATE = 0.2;
@@ -235,6 +235,8 @@ export const sendAttendanceChecks = async (now = new Date()) => {
  * virtual account. The commission never moves; the ledger just books it as revenue.
  * ------------------------------------------------------------------ */
 const MAX_TRANSFER_ATTEMPTS = 3;
+/** The answer-driven rules stand aside once an admin has decided a dispute. */
+const undecided = { "escrow.dispute.outcome": trusted({ $exists: false }) };
 /**
  * Held viewings whose fee is now the realtor's (decisions 5 and 6): both sides said it
  * happened; the realtor did and the seeker let the 48 hours run out; or the seeker
@@ -244,13 +246,16 @@ const releasable = (now) => ({
     "escrow.status": "held",
     "escrow.transferAttempts": trusted({ $lt: MAX_TRANSFER_ATTEMPTS }),
     $or: [
-        { "escrow.realtorAnswer.answer": "happened", "escrow.seekerAnswer.answer": "happened" },
+        { ...undecided, "escrow.realtorAnswer.answer": "happened", "escrow.seekerAnswer.answer": "happened" },
         {
+            ...undecided,
             "escrow.realtorAnswer.answer": "happened",
             "escrow.seekerAnswer.answer": trusted({ $exists: false }),
             "escrow.releaseAt": trusted({ $lte: now }),
         },
-        { status: "cancelled", cancelledBy: "seeker" },
+        { ...undecided, status: "cancelled", cancelledBy: "seeker" },
+        // An admin decided the dispute for the realtor, in full or in part.
+        { "escrow.dispute.outcome": trusted({ $in: ["release", "split"] }) },
     ],
 });
 /**
@@ -278,7 +283,7 @@ const startRelease = async (id, now) => {
         const transfer = await createTransfer({
             bankCode: account.bankCode,
             accountNumber: account.accountNumber,
-            amount: inspection.escrow.fee,
+            amount: inspection.escrow.releaseAmount ?? inspection.escrow.fee,
             reference,
             narration: `INSPECTRA inspection fee ${reference}`,
         });
@@ -339,7 +344,9 @@ export const settleTransfer = async (transfer) => {
     }, { returnDocument: "after" });
     if (!inspection)
         return;
-    const { fee, commission } = inspection.escrow;
+    const { commission } = inspection.escrow;
+    // A split pays the realtor only their share; the rest goes back to the seeker next.
+    const fee = inspection.escrow.releaseAmount ?? inspection.escrow.fee;
     const [escrow, revenue, realtor] = await Promise.all([
         houseBook("escrow"),
         houseBook("revenue"),
@@ -366,6 +373,8 @@ export const settleTransfer = async (transfer) => {
     const people = await partiesOf(inspection);
     if (people)
         sendFeeReleased(people.realtor.email, people.about("seeker"), fee);
+    if (inspection.escrow.dispute.outcome === "split")
+        await startRefund(inspection._id);
 };
 /** Catches transfers whose webhook never arrived by asking Flutterwave directly. */
 export const pollReleases = async () => {
@@ -388,38 +397,46 @@ export const pollReleases = async () => {
 const MAX_REFUND_ATTEMPTS = 3;
 const CONTEST_WINDOW = 48 * HOUR;
 /**
- * Held viewings the realtor is at fault for (decision 8): they cancelled, or declined
- * a time the seeker moved a paid viewing to. The seeker gets everything back.
+ * Viewings whose seeker is owed money back: the realtor cancelled, or declined a time
+ * the seeker moved a paid viewing to (decision 8); an admin decided a dispute for the
+ * seeker; or a split whose realtor share has already gone out.
  */
 const refundable = () => ({
-    "escrow.status": "held",
     "escrow.refundAttempts": trusted({ $lt: MAX_REFUND_ATTEMPTS }),
-    $or: [{ status: "cancelled", cancelledBy: "realtor" }, { status: "declined" }],
+    $or: [
+        { ...undecided, "escrow.status": "held", status: "cancelled", cancelledBy: "realtor" },
+        { ...undecided, "escrow.status": "held", status: "declined" },
+        { "escrow.status": "held", "escrow.dispute.outcome": "refund" },
+        { "escrow.status": "released", "escrow.dispute.outcome": "split" },
+    ],
 });
 /**
- * Claims one viewing (`held` -> `refunding`) and asks Flutterwave to return the whole
- * payment to the seeker's original method. Exported so an admin's dispute decision
- * can refund through the same path.
+ * Claims one viewing (-> `refunding`) and asks Flutterwave to return the payment, or a
+ * split's share of it, to the seeker's original method. A refund that does not go out
+ * puts the viewing back in the state it was claimed from, so the sweep can retry it.
  */
-export const startRefund = async (id, filter = refundable()) => {
-    const inspection = await Inspection.findOneAndUpdate({ ...filter, _id: id }, { $set: { "escrow.status": "refunding" }, $inc: { "escrow.refundAttempts": 1 } }, { returnDocument: "after" });
-    if (!inspection)
+export const startRefund = async (id) => {
+    const claimed = await Inspection.findOneAndUpdate({ ...refundable(), _id: id }, { $set: { "escrow.status": "refunding" }, $inc: { "escrow.refundAttempts": 1 } }, { returnDocument: "before" });
+    if (!claimed)
         return false;
-    const payment = await Payment.findById(inspection.escrow.payment).select("flwId");
+    const { escrow } = claimed;
+    const from = escrow.status;
+    const amount = escrow.refundAmount ?? escrow.fee + escrow.commission;
+    const payment = await Payment.findById(escrow.payment).select("flwId");
     const back = { _id: id, "escrow.status": "refunding" };
     if (!payment?.flwId) {
-        await Inspection.updateOne(back, { $set: { "escrow.status": "held" } });
+        await Inspection.updateOne(back, { $set: { "escrow.status": from } });
         console.error(`Refund of inspection ${String(id)} waits: no Flutterwave charge on record.`);
         return false;
     }
     try {
-        const refund = await createRefund(payment.flwId, inspection.escrow.fee + inspection.escrow.commission);
+        const refund = await createRefund(payment.flwId, amount);
         await Inspection.updateOne(back, { $set: { "escrow.refundId": refund.id } });
         await settleRefund(refund);
     }
     catch (error) {
         if (error instanceof TransferRejected) {
-            await Inspection.updateOne(back, { $set: { "escrow.status": "held" } });
+            await Inspection.updateOne(back, { $set: { "escrow.status": from } });
             console.error(`Refund of inspection ${String(id)} refused: ${error.message}`);
         }
         else {
@@ -443,7 +460,7 @@ export const settleRefund = async (refund) => {
     const inspection = await Inspection.findOneAndUpdate({ "escrow.status": "refunding", "escrow.refundId": refund.id }, { $set: { "escrow.status": "refunded", "escrow.settledAt": new Date() } }, { returnDocument: "after" });
     if (!inspection)
         return;
-    const total = inspection.escrow.fee + inspection.escrow.commission;
+    const total = inspection.escrow.refundAmount ?? inspection.escrow.fee + inspection.escrow.commission;
     const escrow = await houseBook("escrow");
     await post({
         account: escrow._id,
@@ -515,6 +532,47 @@ export const forfeitDue = async (now = new Date()) => {
             sendViewingForfeited(people.seeker.email, people.about("realtor"));
     }
     return forfeited;
+};
+/* ------------------------------------------------------------------ *
+ * Disputes: an admin's decision, carried out by the same release and refund paths.
+ * ------------------------------------------------------------------ */
+/**
+ * Records an admin's decision on a disputed viewing and starts the money moving.
+ * The viewing goes back to `held` carrying the outcome, which is what the release and
+ * refund rules key on, so a transfer or refund that fails is retried by the sweep
+ * exactly like any other. A split pays the realtor `realtorShare` of the fee first,
+ * then refunds the rest of the fee; INSPECTRA keeps the commission.
+ */
+export const decideDispute = async (id, outcome, note, realtorShare) => {
+    const now = new Date();
+    const set = {
+        "escrow.status": "held",
+        "escrow.dispute.outcome": outcome,
+        "escrow.dispute.note": note,
+        "escrow.dispute.decidedAt": now,
+    };
+    const current = await Inspection.findById(id).select("escrow.fee escrow.status");
+    if (!current || current.escrow.status !== "disputed")
+        return null;
+    if (outcome === "split") {
+        const share = realtorShare ?? 0;
+        set["escrow.releaseAmount"] = share;
+        set["escrow.refundAmount"] = current.escrow.fee - share;
+    }
+    const inspection = await Inspection.findOneAndUpdate({ _id: id, "escrow.status": "disputed" }, { $set: set }, { returnDocument: "after" });
+    if (!inspection)
+        return null;
+    const people = await partiesOf(inspection);
+    if (people) {
+        sendDisputeDecided(people.seeker.email, people.about("realtor"), "seeker", inspection.escrow);
+        sendDisputeDecided(people.realtor.email, people.about("seeker"), "realtor", inspection.escrow);
+    }
+    // Act now rather than wait up to 15 minutes for the sweep.
+    if (outcome === "refund")
+        await startRefund(inspection._id);
+    else
+        await startRelease(inspection._id, now);
+    return Inspection.findById(id);
 };
 const SWEEP_EVERY = 15 * 60 * 1000;
 let sweeping = false;

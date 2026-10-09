@@ -106,6 +106,8 @@ const inspectionSchema = new Schema({
         transferAttempts: { type: Number, default: 0, min: 0 },
         refundId: { type: Number },
         refundAttempts: { type: Number, default: 0, min: 0 },
+        releaseAmount: { type: Number, min: 0 },
+        refundAmount: { type: Number, min: 0 },
         dispute: {
             reason: {
                 type: String,
@@ -162,6 +164,8 @@ export const inspectionRecord = (inspection) => ({
         releaseAt: inspection.escrow.releaseAt,
         realtorAnswer: answerOf(inspection.escrow.realtorAnswer),
         seekerAnswer: answerOf(inspection.escrow.seekerAnswer),
+        releaseAmount: inspection.escrow.releaseAmount,
+        refundAmount: inspection.escrow.refundAmount,
         dispute: {
             reason: inspection.escrow.dispute.reason,
             openedAt: inspection.escrow.dispute.openedAt,

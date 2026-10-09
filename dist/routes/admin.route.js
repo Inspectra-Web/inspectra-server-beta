@@ -1,10 +1,10 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, listPayments, listRealtors, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, listDisputes, listPayments, listRealtors, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
-import { reviewListingSchema, userStatusSchema } from "../validators/admin.validator.js";
+import { decideDisputeSchema, reviewListingSchema, userStatusSchema, } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 const tooManyAttempts = (_req, _res, next) => next(new AppError("Too many attempts. Please try again later.", 429));
@@ -24,6 +24,9 @@ router.get("/listings", protect, restrictTo("admin"), listListings);
 router.get("/payments", protect, restrictTo("admin"), listPayments);
 router.get("/virtual-accounts", protect, restrictTo("admin"), listVirtualAccounts);
 router.get("/wallets", protect, restrictTo("admin"), listWallets);
+router.get("/disputes", protect, restrictTo("admin"), listDisputes);
+router.get("/disputes/:id", protect, restrictTo("admin"), getDispute);
+router.patch("/disputes/:id", protect, restrictTo("admin"), validate(decideDisputeSchema), decideDisputeHandler);
 // Below the literal above, and keyed on the reference rather than an id: that is the
 // string on the realtor's receipt and in Flutterwave.
 router.get("/payments/:reference", protect, restrictTo("admin"), getPayment);
