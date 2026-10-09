@@ -1,13 +1,17 @@
 import type { Request, Response } from "express";
+import type { Types } from "mongoose";
 
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
+import Inspection from "../models/inspection.model.js";
+import LedgerEntry from "../models/ledgerEntry.model.js";
 import VirtualAccount, { publicVirtualAccount } from "../models/virtualAccount.model.js";
 import { decrypt } from "../services/crypto.service.js";
 import { sendVirtualAccountOpened } from "../services/email.service.js";
 import { createAccount, findAccount, getBalance } from "../services/planbok.service.js";
 import { ensureProfile } from "../services/profile.service.js";
+import { listEarningsSchema } from "../validators/virtualAccount.validator.js";
 
 export const getMyVirtualAccount = async (req: Request, res: Response): Promise<void> => {
   const account = await VirtualAccount.findOne({ user: req.user!._id });
@@ -81,4 +85,104 @@ export const openMyVirtualAccount = async (req: Request, res: Response): Promise
   sendVirtualAccountOpened(user.email, account);
 
   res.status(201).json({ status: "success", data: { account: publicVirtualAccount(account) } });
+};
+
+interface EarningRow {
+  _id: Types.ObjectId;
+  amount: number;
+  flwReference: string;
+  createdAt: Date;
+  inspection?: { _id: Types.ObjectId; slot: Date; property?: { title: string; ref: string } };
+}
+
+interface EarningsPage {
+  rows: EarningRow[];
+  total: { count: number; kobo: number }[];
+}
+
+/**
+ * Inspection fees paid into this realtor's account, from the ledger: a fee counts once
+ * Flutterwave reported its transfer successful, never before. `held` is what buyers
+ * have paid that is still waiting on a viewing, an answer or the transfer itself, so
+ * the realtor can see money on its way without it being called theirs yet. A disputed
+ * fee is left out of both: it may not come to them at all.
+ */
+export const listMyEarnings = async (req: Request, res: Response): Promise<void> => {
+  const { page, limit } = listEarningsSchema.parse(req.query);
+  const user = req.user!;
+
+  const account = await VirtualAccount.findOne({ user: user._id }).select("_id");
+
+  const [earned] = account
+    ? await LedgerEntry.aggregate<EarningsPage>([
+        { $match: { account: account._id, kind: "release", direction: "credit" } },
+        {
+          $facet: {
+            rows: [
+              { $sort: { createdAt: -1, _id: -1 } },
+              { $skip: (page - 1) * limit },
+              { $limit: limit },
+              {
+                $lookup: {
+                  from: "inspections",
+                  localField: "inspection",
+                  foreignField: "_id",
+                  as: "inspection",
+                  pipeline: [
+                    { $project: { slot: 1, property: 1 } },
+                    {
+                      $lookup: {
+                        from: "properties",
+                        localField: "property",
+                        foreignField: "_id",
+                        as: "property",
+                        pipeline: [{ $project: { title: 1, ref: 1 } }],
+                      },
+                    },
+                    { $unwind: { path: "$property", preserveNullAndEmptyArrays: true } },
+                  ],
+                },
+              },
+              { $unwind: { path: "$inspection", preserveNullAndEmptyArrays: true } },
+            ],
+            total: [{ $group: { _id: null, count: { $sum: 1 }, kobo: { $sum: "$amount" } } }],
+          },
+        },
+      ])
+    : [];
+
+  const [held] = await Inspection.aggregate<{ count: number; naira: number }>([
+    { $match: { realtor: user._id, "escrow.status": { $in: ["held", "releasing"] } } },
+    {
+      $group: {
+        _id: null,
+        count: { $sum: 1 },
+        naira: { $sum: { $ifNull: ["$escrow.releaseAmount", "$escrow.fee"] } },
+      },
+    },
+  ]);
+
+  const total = earned?.total[0]?.count ?? 0;
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      earnings: (earned?.rows ?? []).map((row) => ({
+        id: row._id,
+        amount: row.amount,
+        reference: row.flwReference,
+        paidAt: row.createdAt,
+        slot: row.inspection?.slot,
+        inspection: row.inspection?._id,
+        property: row.inspection?.property?.title ?? "",
+      })),
+      // Kobo, like the balance, so both render through the same formatter.
+      earned: earned?.total[0]?.kobo ?? 0,
+      held: { count: held?.count ?? 0, kobo: (held?.naira ?? 0) * 100 },
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
 };
