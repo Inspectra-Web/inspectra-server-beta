@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DOCUMENT_STATUSES, VERIFICATION_STATUSES, } from "../models/property.model.js";
 import { DISPUTE_OUTCOMES } from "../models/inspection.model.js";
+import { REQUEST_CITIES, REQUEST_INTENTS } from "../models/request.model.js";
 import { ACCOUNT_STATUSES } from "../models/virtualAccount.model.js";
 import { WALLET_STATUSES } from "../models/wallet.model.js";
 const line = z.string("Required").trim();
@@ -158,5 +159,19 @@ export const decideDisputeSchema = z
             path: ["realtorShare"],
             message: "Say how much of the fee the realtor gets",
         });
+});
+export const REQUEST_STATES = ["live", "expired", "closed"];
+export const listRequestsSchema = z.object({
+    q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+    state: z.enum(["all", ...REQUEST_STATES]).default("live"),
+    city: z.enum(["all", ...REQUEST_CITIES]).default("all"),
+    intent: z.enum(["all", ...REQUEST_INTENTS]).default("all"),
+    page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+    limit: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+        .default(PAGE_SIZE),
 });
 //# sourceMappingURL=admin.validator.js.map

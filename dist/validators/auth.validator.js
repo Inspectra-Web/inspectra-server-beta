@@ -1,17 +1,17 @@
 import { z } from "zod";
 // Mirrors client/src/lib/authSchemas.ts so the two ends agree on the rules.
-const email = z
+export const email = z
     .string("Required")
     .trim()
     .toLowerCase()
     .pipe(z.email("Enter a valid email"));
-const password = z
+export const password = z
     .string("Required")
     .min(8, "Use at least 8 characters")
     .regex(/[a-zA-Z]/, "Include at least one letter")
     .regex(/[0-9]/, "Include at least one number");
 const token = z.string("Required").min(1, "Token is required");
-const passwordsMatch = { path: ["confirmPassword"], message: "Passwords do not match" };
+export const passwordsMatch = { path: ["confirmPassword"], message: "Passwords do not match" };
 export const registerSchema = z
     .object({
     fullname: z.string("Required").trim().min(2, "Enter your full name"),

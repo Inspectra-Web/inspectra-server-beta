@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, listDisputes, listPayments, listRealtors, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, getRequestDemand, listDisputes, listPayments, listRealtors, listRequests, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -24,6 +24,8 @@ router.get("/listings", protect, restrictTo("admin"), listListings);
 router.get("/payments", protect, restrictTo("admin"), listPayments);
 router.get("/virtual-accounts", protect, restrictTo("admin"), listVirtualAccounts);
 router.get("/wallets", protect, restrictTo("admin"), listWallets);
+router.get("/requests", protect, restrictTo("admin"), listRequests);
+router.get("/requests/demand", protect, restrictTo("admin"), getRequestDemand);
 router.get("/disputes", protect, restrictTo("admin"), listDisputes);
 router.get("/disputes/:id", protect, restrictTo("admin"), getDispute);
 router.patch("/disputes/:id", protect, restrictTo("admin"), validate(decideDisputeSchema), decideDisputeHandler);

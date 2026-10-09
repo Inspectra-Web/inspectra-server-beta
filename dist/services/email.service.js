@@ -18,7 +18,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
 };
 /** Names are stored lowercased, so title-case them as the client does: "ada obi" -> "Ada Obi". */
 const displayName = (fullname) => fullname
-    .split(/s+/)
+    .split(/\s+/)
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
@@ -56,7 +56,7 @@ export const sendResetEmail = (to, url) => sendEmail({
 /**
  * After the address is confirmed, so it only reaches someone who can sign in. A
  * realtor's next step is the identity check that stands between them and a listing;
- * a seeker's is the marketplace.
+ * a seeker's is the requests they filed for the waitlist.
  */
 export const sendWelcome = (to, role) => notify(to, () => sendEmail({
     to,
@@ -65,7 +65,7 @@ export const sendWelcome = (to, role) => notify(to, () => sendEmail({
         eyebrow: "Account",
         preheader: role === "realtor"
             ? "Your email is confirmed. Verify your identity to start listing."
-            : "Your email is confirmed. Every listing here shows its verification status.",
+            : "Your email is confirmed. You're on the waitlist for verified homes.",
         reason: ACCOUNT_REASON,
         blocks: role === "realtor"
             ? [
@@ -75,8 +75,8 @@ export const sendWelcome = (to, role) => notify(to, () => sendEmail({
             ]
             : [
                 heading("Welcome to INSPECTRA"),
-                lead("Your email is confirmed. Every listing here carries its verification status, so you can see what has been checked before you book a viewing."),
-                button("Browse listings", `${envConfig.CLIENT_URL}/listings`),
+                lead("Your email is confirmed, so your property requests are active. We'll let you know when verified homes that match them go live."),
+                button("View your requests", `${envConfig.CLIENT_URL}/dashboard/requests`),
             ],
     }),
 }));
@@ -709,6 +709,77 @@ export const sendVirtualAccountOpened = (to, account) => notify(to, () => sendEm
                 ["Bank", account.bankName],
             ]),
             button("View account", `${envConfig.CLIENT_URL}/realtor/virtual-account`),
+        ],
+    }),
+}));
+/* ------------------------------------------------------------------ *
+ * Property requests: the seeker waitlist. Nothing is listed yet, so the
+ * only promise these make is a notification when matching homes go live.
+ * ------------------------------------------------------------------ */
+const INTENT_LABELS = {
+    rent: "Rent",
+    sale: "Buy",
+    lease: "Lease",
+    shortlet: "Shortlet",
+};
+const BUDGET_PERIODS = {
+    rent: " a year",
+    sale: "",
+    lease: " a year",
+    shortlet: " a night",
+};
+const CITY_LABELS = {
+    lagos: "Lagos",
+    "port-harcourt": "Port Harcourt",
+    abuja: "Abuja",
+};
+const TIMELINE_LABELS = {
+    now: "As soon as possible",
+    "3-months": "Within 3 months",
+    "6-months": "Within 6 months",
+    exploring: "Just exploring",
+};
+/** "self-contained" -> "Self contained". The client owns the real labels; this is close enough for mail. */
+const slugLabel = (slug) => slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, " ");
+export const requestRef = (id) => `REQ-${id.slice(-6).toUpperCase()}`;
+const requestRows = (request) => {
+    const budget = request.budgetMin != null
+        ? `${naira.format(request.budgetMin)} to ${naira.format(request.budgetMax)}`
+        : `Up to ${naira.format(request.budgetMax)}`;
+    const pairs = [
+        ["Looking to", INTENT_LABELS[request.intent]],
+        ["Property", slugLabel(request.type ?? request.category)],
+        ["City", CITY_LABELS[request.city]],
+    ];
+    if (request.areas.length)
+        pairs.push(["Areas", request.areas.join(", ")]);
+    if (request.bedrooms != null)
+        pairs.push(["Bedrooms", `${request.bedrooms}+`]);
+    pairs.push(["Budget", `${budget}${BUDGET_PERIODS[request.intent]}`]);
+    pairs.push(["When", TIMELINE_LABELS[request.timeline]]);
+    return rows(pairs);
+};
+const REQUEST_REASON = "You're getting this because you asked INSPECTRA to tell you about matching homes.";
+/** To the seeker, when a request is filed. */
+export const sendRequestReceived = (to, request) => notify(requestRef(request.id), () => sendEmail({
+    to,
+    subject: "You're on the INSPECTRA waitlist",
+    ...layout({
+        eyebrow: "Waitlist",
+        preheader: "We'll tell you when verified homes matching your request go live.",
+        reason: REQUEST_REASON,
+        blocks: [
+            heading("Your request is in"),
+            lead("INSPECTRA is not listing homes yet. When verified properties that match this request go live, you'll be among the first to hear."),
+            slip({
+                ref: requestRef(request.id),
+                status: "Active",
+                tone: "neutral",
+                title: `${INTENT_LABELS[request.intent]} in ${CITY_LABELS[request.city]}`,
+            }),
+            requestRows(request),
+            note("Requests stay active for 90 days. We'll check in before then to ask if you're still looking."),
+            button("View your requests", `${envConfig.CLIENT_URL}/dashboard/requests`),
         ],
     }),
 }));
