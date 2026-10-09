@@ -99,6 +99,9 @@ export interface Escrow {
   transferRef: string;
   transferId?: number;
   transferAttempts: number;
+  // The Flutterwave refund returning the seeker's payment, when the realtor is at fault.
+  refundId?: number;
+  refundAttempts: number;
   dispute: {
     reason: string;
     openedAt?: Date;
@@ -221,6 +224,8 @@ const inspectionSchema = new Schema<IInspection>(
       transferRef: { type: String, trim: true, default: "" },
       transferId: { type: Number },
       transferAttempts: { type: Number, default: 0, min: 0 },
+      refundId: { type: Number },
+      refundAttempts: { type: Number, default: 0, min: 0 },
       dispute: {
         reason: {
           type: String,

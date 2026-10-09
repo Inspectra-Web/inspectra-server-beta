@@ -8,6 +8,7 @@ export type LedgerKind =
   | "commission"
   | "withdrawal"
   | "refund"
+  | "forfeit"
   | "reversal";
 
 export const LEDGER_DIRECTIONS: LedgerDirection[] = ["credit", "debit"];
@@ -17,6 +18,7 @@ export const LEDGER_KINDS: LedgerKind[] = [
   "commission",
   "withdrawal",
   "refund",
+  "forfeit",
   "reversal",
 ];
 

@@ -786,6 +786,50 @@ export const sendFeeReleased = (to: string, inspection: InspectionBrief, amount:
     }),
   );
 
+/** To the seeker, once their payment for a viewing has been refunded. */
+export const sendRefundIssued = (to: string, inspection: InspectionBrief, amount: number): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Refund issued: ${inspection.property}`,
+      ...layout({
+        eyebrow: "Payments",
+        preheader: `₦${amount.toLocaleString("en-NG")} is on its way back to you.`,
+        reason: SEEKER_REASON,
+        blocks: [
+          heading("Your refund is on its way"),
+          lead(
+            `We've refunded ₦${amount.toLocaleString("en-NG")} for your viewing with ${displayName(inspection.person)} to the card or account you paid with. Your bank may take a few working days to show it.`,
+          ),
+          viewingSlip(inspection, "Refunded", "verified"),
+          button("Open viewing", seekerLink(inspection)),
+        ],
+      }),
+    }),
+  );
+
+/** To the seeker, when a no-show they did not contest means the fee is not refunded. */
+export const sendViewingForfeited = (to: string, inspection: InspectionBrief): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Viewing missed: ${inspection.property}`,
+      ...layout({
+        eyebrow: "Viewings",
+        preheader: `It was booked for ${when(inspection)}.`,
+        reason: SEEKER_REASON,
+        blocks: [
+          heading("This viewing was marked as missed"),
+          lead(
+            `${displayName(inspection.person)} reported that you did not attend, and it wasn't disputed within 48 hours, so the inspection fee is not refunded.`,
+          ),
+          viewingSlip(inspection, "Missed", "disputed"),
+          button("Open viewing", seekerLink(inspection)),
+        ],
+      }),
+    }),
+  );
+
 /** To the side that did not raise it: a paid viewing's money is on hold for review. */
 export const sendDisputeNotice = (
   to: string,
