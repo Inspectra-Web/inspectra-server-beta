@@ -7,7 +7,8 @@ import Payment, { publicPayment, } from "../models/payment.model.js";
 import { CADENCES, PLANS, TIERS, planPrice, publicSubscription, } from "../models/subscription.model.js";
 import User from "../models/user.model.js";
 import { sendPaymentReceipt } from "../services/email.service.js";
-import { holdEscrow } from "../services/escrow.service.js";
+import { holdEscrow, settleTransfer } from "../services/escrow.service.js";
+import { getTransfer } from "../services/flutterwave.service.js";
 import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { listPaymentsSchema, paymentReferenceSchema, } from "../validators/payment.validator.js";
 import { inspectionIdSchema } from "../validators/inspection.validator.js";
@@ -406,6 +407,15 @@ export const flutterwaveWebhook = async (req, res) => {
     if (!signed)
         throw new AppError("That request is not from the payment service.", 401);
     const { event, data } = req.body;
+    // A release transfer finishing. Read back from Flutterwave, never taken off the body.
+    if (event === "transfer.completed" && data?.id) {
+        try {
+            await settleTransfer(await getTransfer(data.id));
+        }
+        catch (error) {
+            console.error(`Webhook transfer settle failed for ${data.id}:`, error);
+        }
+    }
     if (event === "charge.completed" && data?.id && data.tx_ref) {
         // Swallowed on purpose. A signed event is always acknowledged: throwing here would
         // have Flutterwave redeliver a charge that genuinely failed, forever.

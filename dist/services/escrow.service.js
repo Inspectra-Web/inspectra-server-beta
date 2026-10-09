@@ -4,7 +4,8 @@ import LedgerEntry from "../models/ledgerEntry.model.js";
 import Property from "../models/property.model.js";
 import User from "../models/user.model.js";
 import VirtualAccount from "../models/virtualAccount.model.js";
-import { sendAttendanceCheck, sendDisputeNotice, sendDisputeOpened, sendInspectionUnpaid, } from "./email.service.js";
+import { sendAttendanceCheck, sendDisputeNotice, sendDisputeOpened, sendFeeReleased, sendInspectionUnpaid, } from "./email.service.js";
+import { createTransfer, getTransfer, TransferRejected, } from "./flutterwave.service.js";
 /** INSPECTRA's commission, added on top of the realtor's fee. Mirrored on the client. */
 export const COMMISSION_RATE = 0.2;
 const HOUR = 60 * 60 * 1000;
@@ -36,8 +37,11 @@ export const priceOnConfirm = (inspection, listingFee) => {
     escrow.payBy = payBy;
     return true;
 };
-/** The ledger book seekers' money sits in. Never opened on Planbok (section 3). */
-const escrowBook = async () => (await VirtualAccount.findOneAndUpdate({ refId: "inspectra-escrow" }, { $setOnInsert: { kind: "escrow", refId: "inspectra-escrow", status: "active" } }, { upsert: true, returnDocument: "after" }));
+/**
+ * A house ledger book: `escrow` holds seekers' money, `revenue` the commission. Both
+ * live inside INSPECTRA's Flutterwave balance and are never opened on Planbok.
+ */
+const houseBook = async (kind) => (await VirtualAccount.findOneAndUpdate({ refId: `inspectra-${kind}` }, { $setOnInsert: { kind, refId: `inspectra-${kind}`, status: "active" } }, { upsert: true, returnDocument: "after" }));
 const DUPLICATE_KEY = 11000;
 /**
  * Moves a paid booking's escrow to `held` and books the money in, exactly once.
@@ -62,24 +66,28 @@ export const holdEscrow = async (payment) => {
     if (!held && !inspection?.escrow.payment?.equals(payment._id))
         console.error(`Payment ${payment.reference} arrived for inspection ${String(payment.inspection)} ` +
             `in escrow state "${inspection?.escrow.status ?? "missing"}". Needs a refund.`);
-    const book = await escrowBook();
+    const book = await houseBook("escrow");
+    await post({
+        account: book._id,
+        direction: "credit",
+        kind: "deposit",
+        amount: payment.amount * 100,
+        idempotencyKey: `deposit:${payment.reference}`,
+        inspection: payment.inspection,
+        payment: payment._id,
+        narration: `Inspection payment ${payment.reference}`,
+    });
+    return inspection;
+};
+/** Posts one ledger entry; a repeat of the same key is the unique index saying "done". */
+const post = async (entry) => {
     try {
-        await LedgerEntry.create({
-            account: book._id,
-            direction: "credit",
-            kind: "deposit",
-            amount: payment.amount * 100,
-            idempotencyKey: `deposit:${payment.reference}`,
-            inspection: payment.inspection,
-            payment: payment._id,
-            narration: `Inspection payment ${payment.reference}`,
-        });
+        await LedgerEntry.create(entry);
     }
     catch (error) {
         if (error.code !== DUPLICATE_KEY)
             throw error;
     }
-    return inspection;
 };
 /* ------------------------------------------------------------------ *
  * The sweep: the escrow's clock. Each job finds what is due and moves it with a
@@ -221,6 +229,158 @@ export const sendAttendanceChecks = async (now = new Date()) => {
     }
     return sent;
 };
+/* ------------------------------------------------------------------ *
+ * Release: the realtor's fee leaves INSPECTRA's Flutterwave balance for their
+ * virtual account. The commission never moves; the ledger just books it as revenue.
+ * ------------------------------------------------------------------ */
+const MAX_TRANSFER_ATTEMPTS = 3;
+/**
+ * Held viewings whose fee is now the realtor's (decisions 5 and 6): both sides said it
+ * happened; the realtor did and the seeker let the 48 hours run out; or the seeker
+ * cancelled after paying. A realtor's silence never releases anything.
+ */
+const releasable = (now) => ({
+    "escrow.status": "held",
+    "escrow.transferAttempts": trusted({ $lt: MAX_TRANSFER_ATTEMPTS }),
+    $or: [
+        { "escrow.realtorAnswer.answer": "happened", "escrow.seekerAnswer.answer": "happened" },
+        {
+            "escrow.realtorAnswer.answer": "happened",
+            "escrow.seekerAnswer.answer": trusted({ $exists: false }),
+            "escrow.releaseAt": trusted({ $lte: now }),
+        },
+        { status: "cancelled", cancelledBy: "seeker" },
+    ],
+});
+/**
+ * Claims one viewing (`held` -> `releasing`) and asks Flutterwave to pay the realtor.
+ * The transfer counts only once Flutterwave reports it successful (`settleTransfer`).
+ */
+const startRelease = async (id, now) => {
+    const current = await Inspection.findById(id).select("realtor escrow.transferAttempts");
+    if (!current)
+        return false;
+    const account = await VirtualAccount.findOne({ user: current.realtor, status: "active" });
+    if (!account?.accountNumber || !account.bankCode) {
+        console.error(`Release of inspection ${String(id)} waits: the realtor has no active account.`);
+        return false;
+    }
+    const attempt = current.escrow.transferAttempts + 1;
+    const reference = `INS-REL-${String(id).slice(-8).toUpperCase()}-${attempt}`;
+    const inspection = await Inspection.findOneAndUpdate({ ...releasable(now), _id: id }, {
+        $set: { "escrow.status": "releasing", "escrow.transferRef": reference },
+        $inc: { "escrow.transferAttempts": 1 },
+    }, { returnDocument: "after" });
+    if (!inspection)
+        return false;
+    try {
+        const transfer = await createTransfer({
+            bankCode: account.bankCode,
+            accountNumber: account.accountNumber,
+            amount: inspection.escrow.fee,
+            reference,
+            narration: `INSPECTRA inspection fee ${reference}`,
+        });
+        await Inspection.updateOne({ _id: id, "escrow.transferRef": reference }, { $set: { "escrow.transferId": transfer.id } });
+    }
+    catch (error) {
+        if (error instanceof TransferRejected) {
+            // Refused outright, so nothing was sent: back to held, and the next sweep tries
+            // again under a new reference until the attempts run out.
+            await Inspection.updateOne({ _id: id, "escrow.status": "releasing", "escrow.transferRef": reference }, { $set: { "escrow.status": "held", "escrow.transferRef": "" } });
+            console.error(`Release ${reference} refused: ${error.message}`);
+        }
+        else {
+            // Unknown whether it went out. Left `releasing` with no transfer id, because a
+            // blind retry could pay twice. Needs an admin to check Flutterwave.
+            console.error(`Release ${reference} outcome unknown, check Flutterwave:`, error);
+        }
+    }
+    return true;
+};
+export const releaseDue = async (now = new Date()) => {
+    const candidates = await Inspection.find(releasable(now)).select("_id");
+    let started = 0;
+    for (const { _id } of candidates)
+        if (await startRelease(_id, now))
+            started += 1;
+    return started;
+};
+/**
+ * Applies Flutterwave's verdict on a release transfer, once. Called from the webhook
+ * and from the sweep's poll, with a transfer read back from Flutterwave, never a
+ * webhook body. Success books the ledger and tells the realtor; failure returns the
+ * money to `held` for another attempt.
+ */
+export const settleTransfer = async (transfer) => {
+    const releasing = {
+        "escrow.status": "releasing",
+        "escrow.transferRef": transfer.reference,
+    };
+    if (transfer.status === "FAILED") {
+        const failed = await Inspection.findOneAndUpdate(releasing, {
+            $set: { "escrow.status": "held", "escrow.transferRef": "" },
+            $unset: { "escrow.transferId": 1 },
+        });
+        if (failed)
+            console.error(`Release ${transfer.reference} failed: ${transfer.complete_message ?? ""}`);
+        return;
+    }
+    if (transfer.status !== "SUCCESSFUL")
+        return;
+    const now = new Date();
+    const inspection = await Inspection.findOneAndUpdate(releasing, {
+        $set: {
+            "escrow.status": "released",
+            "escrow.transferId": transfer.id,
+            "escrow.settledAt": now,
+        },
+    }, { returnDocument: "after" });
+    if (!inspection)
+        return;
+    const { fee, commission } = inspection.escrow;
+    const [escrow, revenue, realtor] = await Promise.all([
+        houseBook("escrow"),
+        houseBook("revenue"),
+        VirtualAccount.findOne({ user: inspection.realtor }),
+    ]);
+    const ref = transfer.reference;
+    // Two legs each: the fee out of escrow into the realtor's account, the commission
+    // out of escrow into revenue. Keyed per leg, so a second settle posts nothing.
+    const leg = (account, direction, kind, naira, key) => post({
+        account,
+        direction,
+        kind,
+        amount: naira * 100,
+        idempotencyKey: `${ref}:${key}`,
+        inspection: inspection._id,
+        flwReference: ref,
+        narration: `${kind === "release" ? "Inspection fee" : "Commission"} ${ref}`,
+    });
+    await leg(escrow._id, "debit", "release", fee, "escrow-out");
+    if (realtor)
+        await leg(realtor._id, "credit", "release", fee, "realtor-in");
+    await leg(escrow._id, "debit", "commission", commission, "commission-out");
+    await leg(revenue._id, "credit", "commission", commission, "commission-in");
+    const people = await partiesOf(inspection);
+    if (people)
+        sendFeeReleased(people.realtor.email, people.about("seeker"), fee);
+};
+/** Catches transfers whose webhook never arrived by asking Flutterwave directly. */
+export const pollReleases = async () => {
+    const inFlight = await Inspection.find({
+        "escrow.status": "releasing",
+        "escrow.transferId": trusted({ $exists: true }),
+    }).select("escrow.transferId");
+    for (const { escrow } of inFlight) {
+        try {
+            await settleTransfer(await getTransfer(escrow.transferId));
+        }
+        catch (error) {
+            console.error(`Could not read transfer ${escrow.transferId}:`, error);
+        }
+    }
+};
 const SWEEP_EVERY = 15 * 60 * 1000;
 let sweeping = false;
 const sweep = async () => {
@@ -235,6 +395,10 @@ const sweep = async () => {
         const checked = await sendAttendanceChecks();
         if (checked)
             console.log(`Escrow sweep: asked about ${checked} viewing(s).`);
+        await pollReleases();
+        const released = await releaseDue();
+        if (released)
+            console.log(`Escrow sweep: started ${released} release(s).`);
     }
     catch (error) {
         console.error("Escrow sweep failed:", error);

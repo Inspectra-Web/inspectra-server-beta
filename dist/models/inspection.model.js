@@ -101,6 +101,9 @@ const inspectionSchema = new Schema({
         releaseAt: { type: Date },
         realtorAnswer: confirmation(),
         seekerAnswer: confirmation(),
+        transferRef: { type: String, trim: true, default: "" },
+        transferId: { type: Number },
+        transferAttempts: { type: Number, default: 0, min: 0 },
         dispute: {
             reason: {
                 type: String,
