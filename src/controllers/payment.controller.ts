@@ -24,7 +24,8 @@ import {
 } from "../models/subscription.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
 import { sendPaymentReceipt } from "../services/email.service.js";
-import { holdEscrow } from "../services/escrow.service.js";
+import { holdEscrow, settleTransfer } from "../services/escrow.service.js";
+import { getTransfer } from "../services/flutterwave.service.js";
 import {
   entitlements,
   listingAllowance,
@@ -581,6 +582,15 @@ export const flutterwaveWebhook = async (req: Request, res: Response): Promise<v
     event?: string;
     data?: { id?: number; tx_ref?: string };
   };
+
+  // A release transfer finishing. Read back from Flutterwave, never taken off the body.
+  if (event === "transfer.completed" && data?.id) {
+    try {
+      await settleTransfer(await getTransfer(data.id));
+    } catch (error) {
+      console.error(`Webhook transfer settle failed for ${data.id}:`, error);
+    }
+  }
 
   if (event === "charge.completed" && data?.id && data.tx_ref) {
     // Swallowed on purpose. A signed event is always acknowledged: throwing here would

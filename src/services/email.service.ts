@@ -764,6 +764,28 @@ export const sendAttendanceCheck = (
     }),
   );
 
+/** To the realtor, once their inspection fee has landed in their virtual account. */
+export const sendFeeReleased = (to: string, inspection: InspectionBrief, amount: number): void =>
+  notify(inspection.ref, () =>
+    sendEmail({
+      to,
+      subject: `Inspection fee paid: ${inspection.property}`,
+      ...layout({
+        eyebrow: "Payments",
+        preheader: `₦${amount.toLocaleString("en-NG")} is in your virtual account.`,
+        reason: LISTER_REASON,
+        blocks: [
+          heading("Your inspection fee is paid"),
+          lead(
+            `₦${amount.toLocaleString("en-NG")} for your viewing with ${displayName(inspection.person)} has been paid into your INSPECTRA virtual account.`,
+          ),
+          viewingSlip(inspection, "Paid", "verified"),
+          button("Open viewing", realtorLink(inspection)),
+        ],
+      }),
+    }),
+  );
+
 /** To the side that did not raise it: a paid viewing's money is on hold for review. */
 export const sendDisputeNotice = (
   to: string,

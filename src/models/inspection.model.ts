@@ -94,6 +94,11 @@ export interface Escrow {
   releaseAt?: Date;
   realtorAnswer: Confirmation;
   seekerAnswer: Confirmation;
+  // The Flutterwave transfer paying the realtor. A fresh reference per attempt, so a
+  // retry after a failed transfer can never be mistaken for the first.
+  transferRef: string;
+  transferId?: number;
+  transferAttempts: number;
   dispute: {
     reason: string;
     openedAt?: Date;
@@ -213,6 +218,9 @@ const inspectionSchema = new Schema<IInspection>(
       releaseAt: { type: Date },
       realtorAnswer: confirmation(),
       seekerAnswer: confirmation(),
+      transferRef: { type: String, trim: true, default: "" },
+      transferId: { type: Number },
+      transferAttempts: { type: Number, default: 0, min: 0 },
       dispute: {
         reason: {
           type: String,
