@@ -102,6 +102,10 @@ export interface Escrow {
   // The Flutterwave refund returning the seeker's payment, when the realtor is at fault.
   refundId?: number;
   refundAttempts: number;
+  // Set only by an admin's split decision: what the realtor gets and what goes back to
+  // the seeker. Unset, a release pays the full fee and a refund returns the full total.
+  releaseAmount?: number;
+  refundAmount?: number;
   dispute: {
     reason: string;
     openedAt?: Date;
@@ -226,6 +230,8 @@ const inspectionSchema = new Schema<IInspection>(
       transferAttempts: { type: Number, default: 0, min: 0 },
       refundId: { type: Number },
       refundAttempts: { type: Number, default: 0, min: 0 },
+      releaseAmount: { type: Number, min: 0 },
+      refundAmount: { type: Number, min: 0 },
       dispute: {
         reason: {
           type: String,
@@ -294,6 +300,8 @@ export const inspectionRecord = (inspection: InspectionDoc) => ({
     releaseAt: inspection.escrow.releaseAt,
     realtorAnswer: answerOf(inspection.escrow.realtorAnswer),
     seekerAnswer: answerOf(inspection.escrow.seekerAnswer),
+    releaseAmount: inspection.escrow.releaseAmount,
+    refundAmount: inspection.escrow.refundAmount,
     dispute: {
       reason: inspection.escrow.dispute.reason,
       openedAt: inspection.escrow.dispute.openedAt,

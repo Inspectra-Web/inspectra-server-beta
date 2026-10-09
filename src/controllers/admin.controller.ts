@@ -4,9 +4,15 @@ import type { PipelineStage, Types } from "mongoose";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Identity, { publicIdentity } from "../models/identity.model.js";
+import Inspection, {
+  inspectionRecord,
+  type IInspection,
+  type InspectionDoc,
+} from "../models/inspection.model.js";
 import Profile, { publicProfile } from "../models/profile.model.js";
 import Property, {
   detailedProperty,
+  listingCard,
   type ListingStatus,
   type VerificationStatus,
 } from "../models/property.model.js";
@@ -21,13 +27,14 @@ import Subscription, {
   type Cadence,
   type Tier,
 } from "../models/subscription.model.js";
-import User, { publicUser, type IUser } from "../models/user.model.js";
+import User, { personCard, publicUser, type IUser, type UserDoc } from "../models/user.model.js";
 import VirtualAccount, {
   publicVirtualAccount,
   type AccountStatus,
 } from "../models/virtualAccount.model.js";
 import Wallet, { publicWallet, type WalletStatus } from "../models/wallet.model.js";
 import { sendAccountStatus, sendListingReviewed } from "../services/email.service.js";
+import { decideDispute } from "../services/escrow.service.js";
 import { getBalance, getWalletBalances } from "../services/planbok.service.js";
 import {
   entitlements,
@@ -38,6 +45,7 @@ import {
 } from "../services/subscription.service.js";
 import { sendAuthCookie } from "../services/token.service.js";
 import {
+  listDisputesSchema,
   listListingsSchema,
   listRealtorsSchema,
   listingIdSchema,
@@ -45,10 +53,13 @@ import {
   listVirtualAccountsSchema,
   listWalletsSchema,
   userIdSchema,
+  type DecideDisputeInput,
+  type DisputeState,
   type ReviewListingInput,
   type UserStatusInput,
 } from "../validators/admin.validator.js";
 import type { LoginInput } from "../validators/auth.validator.js";
+import { inspectionIdSchema } from "../validators/inspection.validator.js";
 import {
   listAdminPaymentsSchema,
   paymentReferenceSchema,
@@ -1304,4 +1315,198 @@ export const getRealtorWalletBalances = async (req: Request, res: Response): Pro
     wallet?.status === "active" && wallet.planbokId ? await getWalletBalances(wallet.planbokId) : null;
 
   res.status(200).json({ status: "success", data: { balances } });
+};
+
+/* ------------------------------------------------------------------ *
+ * Disputes: paid viewings whose two sides disagree. The money is frozen until an
+ * admin decides; the decision is carried out by the escrow service.
+ * ------------------------------------------------------------------ */
+
+interface DisputeRow {
+  _id: Types.ObjectId;
+  slot: Date;
+  escrow: IInspection["escrow"];
+  state: DisputeState;
+  property: { _id: Types.ObjectId; title: string; ref: string };
+  seeker: { _id: Types.ObjectId; fullname: string; email: string; avatar?: string };
+  realtor: { _id: Types.ObjectId; fullname: string; email: string; avatar?: string };
+}
+
+interface DisputePage {
+  rows: DisputeRow[];
+  total: { count: number }[];
+  states: { _id: DisputeState; count: number }[];
+}
+
+const party = (person: DisputeRow["seeker"]) => ({
+  id: person._id,
+  fullname: person.fullname,
+  email: person.email,
+  avatar: person.avatar ?? "",
+});
+
+const disputeRow = (row: DisputeRow) => ({
+  id: row._id,
+  slot: row.slot,
+  state: row.state,
+  property: { id: row.property._id, title: row.property.title, ref: row.property.ref },
+  seeker: party(row.seeker),
+  realtor: party(row.realtor),
+  fee: row.escrow.fee,
+  total: row.escrow.fee + row.escrow.commission,
+  reason: row.escrow.dispute.reason,
+  openedAt: row.escrow.dispute.openedAt,
+  outcome: row.escrow.dispute.outcome,
+  decidedAt: row.escrow.dispute.decidedAt,
+});
+
+/**
+ * Every viewing that has ever been disputed, open first by default. The state filter
+ * narrows `rows` and `total` only; the `states` branch counts the whole set.
+ */
+export const listDisputes = async (req: Request, res: Response): Promise<void> => {
+  const { q, state, page, limit } = listDisputesSchema.parse(req.query);
+
+  const stateMatch: PipelineStage.FacetPipelineStage[] =
+    state === "all" ? [] : [{ $match: { state } }];
+
+  const person = (from: string) => [
+    { $lookup: { from: "users", localField: from, foreignField: "_id", as: from } },
+    { $unwind: `$${from}` },
+  ];
+
+  const pipeline: PipelineStage[] = [
+    { $match: { "escrow.dispute.openedAt": { $exists: true } } },
+    {
+      $addFields: {
+        state: { $cond: [{ $eq: ["$escrow.status", "disputed"] }, "open", "decided"] },
+      },
+    },
+    { $lookup: { from: "properties", localField: "property", foreignField: "_id", as: "property" } },
+    { $unwind: "$property" },
+    ...person("seeker"),
+    ...person("realtor"),
+  ];
+
+  if (q) {
+    const pattern = new RegExp(escapeRegex(q), "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { "property.title": pattern },
+          { "property.ref": pattern },
+          { "seeker.fullname": pattern },
+          { "seeker.email": pattern },
+          { "realtor.fullname": pattern },
+          { "realtor.email": pattern },
+        ],
+      },
+    });
+  }
+
+  pipeline.push({
+    $facet: {
+      rows: [
+        ...stateMatch,
+        { $sort: { "escrow.dispute.openedAt": -1, _id: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+      ],
+      total: [...stateMatch, { $count: "count" }],
+      states: [{ $group: { _id: "$state", count: { $sum: 1 } } }],
+    },
+  });
+
+  const [result] = await Inspection.aggregate<DisputePage>(pipeline);
+
+  const rows = result?.rows ?? [];
+  const total = result?.total[0]?.count ?? 0;
+  const counts: Record<DisputeState | "all", number> = { all: 0, open: 0, decided: 0 };
+
+  for (const row of result?.states ?? []) {
+    counts[row._id] += row.count;
+    counts.all += row.count;
+  }
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      disputes: rows.map(disputeRow),
+      counts,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+/** One dispute in full: the booking, both people, the listing and the payment. */
+const disputeDetail = async (inspection: InspectionDoc) => {
+  const [property, seeker, realtor, payment] = await Promise.all([
+    Property.findById(inspection.property),
+    User.findById(inspection.seeker),
+    User.findById(inspection.realtor),
+    Payment.findById(inspection.escrow.payment).select("reference channel paidAt"),
+  ]);
+
+  if (!property || !seeker || !realtor)
+    throw new AppError("This dispute's booking is missing its listing or a party.", 404);
+
+  const contact = (user: UserDoc) => ({ ...personCard(user), email: user.email });
+
+  return {
+    inspection: inspectionRecord(inspection),
+    property: listingCard(property),
+    seeker: contact(seeker),
+    realtor: contact(realtor),
+    payment: payment && {
+      reference: payment.reference,
+      channel: payment.channel,
+      paidAt: payment.paidAt,
+    },
+  };
+};
+
+const findDispute = async (id: string): Promise<InspectionDoc> => {
+  const inspection = await Inspection.findById(id);
+
+  if (!inspection?.escrow.dispute.openedAt) throw new AppError("No dispute with that id.", 404);
+
+  return inspection;
+};
+
+export const getDispute = async (req: Request, res: Response): Promise<void> => {
+  const { id } = inspectionIdSchema.parse(req.params);
+
+  res.status(200).json({
+    status: "success",
+    data: await disputeDetail(await findDispute(id)),
+  });
+};
+
+export const decideDisputeHandler = async (req: Request, res: Response): Promise<void> => {
+  const { id } = inspectionIdSchema.parse(req.params);
+  const { outcome, note, realtorShare }: DecideDisputeInput = req.body;
+
+  const inspection = await findDispute(id);
+
+  if (inspection.escrow.status !== "disputed")
+    throw new AppError("This dispute has already been decided.", 409);
+
+  if (outcome === "split" && (realtorShare ?? 0) >= inspection.escrow.fee)
+    throw new AppError(
+      `A split gives the realtor less than the full ₦${inspection.escrow.fee.toLocaleString("en-NG")} fee. Use release for all of it.`,
+      422,
+    );
+
+  const decided = await decideDispute(inspection._id, outcome, note, realtorShare);
+
+  if (!decided) throw new AppError("This dispute has already been decided.", 409);
+
+  res.status(200).json({
+    status: "success",
+    message: "Decision recorded. Both sides have been told.",
+    data: await disputeDetail(decided),
+  });
 };

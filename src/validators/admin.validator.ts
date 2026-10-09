@@ -5,6 +5,7 @@ import {
   VERIFICATION_STATUSES,
   type VerificationStatus,
 } from "../models/property.model.js";
+import { DISPUTE_OUTCOMES } from "../models/inspection.model.js";
 import { ACCOUNT_STATUSES } from "../models/virtualAccount.model.js";
 import { WALLET_STATUSES } from "../models/wallet.model.js";
 
@@ -161,3 +162,49 @@ export const reviewListingSchema = z
   });
 
 export type ReviewListingInput = z.infer<typeof reviewListingSchema>;
+
+/** `open` is still frozen waiting on an admin; `decided` has a ruling. */
+export type DisputeState = "open" | "decided";
+
+export const DISPUTE_STATES: DisputeState[] = ["open", "decided"];
+
+export const listDisputesSchema = z.object({
+  q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
+  state: z.enum(["all", ...DISPUTE_STATES]).default("open"),
+  page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
+    .default(PAGE_SIZE),
+});
+
+export type ListDisputesQuery = z.infer<typeof listDisputesSchema>;
+
+const DECISION_NOTE_MIN = 10;
+const DECISION_NOTE_MAX = 500;
+
+/**
+ * An admin's ruling on a disputed viewing. The note goes to both sides, so it is
+ * required: an outcome with no reason is the thing a dispute exists to avoid. The
+ * split share is checked against the fee in the controller, which knows the fee.
+ */
+export const decideDisputeSchema = z
+  .strictObject({
+    outcome: z.enum(DISPUTE_OUTCOMES, "Choose release, refund or split"),
+    note: line
+      .min(DECISION_NOTE_MIN, "Explain the decision in a sentence or two")
+      .max(DECISION_NOTE_MAX, `Keep it under ${DECISION_NOTE_MAX} characters`),
+    realtorShare: z.number("Enter the realtor's share").int("Enter whole naira").positive().optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.outcome === "split" && body.realtorShare === undefined)
+      ctx.addIssue({
+        code: "custom",
+        path: ["realtorShare"],
+        message: "Say how much of the fee the realtor gets",
+      });
+  });
+
+export type DecideDisputeInput = z.infer<typeof decideDisputeSchema>;
