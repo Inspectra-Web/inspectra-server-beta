@@ -11,7 +11,7 @@ import { ensureProfile } from "../services/profile.service.js";
 import { listEarningsSchema } from "../validators/virtualAccount.validator.js";
 export const getMyVirtualAccount = async (req, res) => {
     const account = await VirtualAccount.findOne({ user: req.user._id });
-    const balance = account?.status === "active" && account.planbokId ? await getBalance(account.planbokId) : null;
+    const balance = account?.status === "active" && account.planbokId ? await getBalance(account.planbokId, req.user.email) : null;
     res.status(200).json({
         status: "success",
         data: { account: account && publicVirtualAccount(account), balance },
@@ -43,7 +43,7 @@ export const openMyVirtualAccount = async (req, res) => {
         dateOfBirth: identity.dateOfBirth,
         bvn: decrypt(identity.bvn),
         nin: decrypt(identity.nin),
-    })) ?? (await findAccount(account.refId));
+    })) ?? (await findAccount(account.refId, user.email));
     if (!opened) {
         // Planbok refused it. Dropping the row frees the idempotency key for a fresh attempt.
         await account.deleteOne();

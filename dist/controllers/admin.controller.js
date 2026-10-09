@@ -842,7 +842,7 @@ export const getRealtorVirtualAccount = async (req, res) => {
     if (!realtor || realtor.role !== "realtor")
         throw new AppError("No realtor with that id.", 404);
     const account = await VirtualAccount.findOne({ user: realtor._id });
-    const balance = account?.status === "active" && account.planbokId ? await getBalance(account.planbokId) : null;
+    const balance = account?.status === "active" && account.planbokId ? await getBalance(account.planbokId, realtor.email) : null;
     res.status(200).json({
         status: "success",
         data: {

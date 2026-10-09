@@ -2,12 +2,12 @@ import { constants, publicEncrypt } from "node:crypto";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 const UNREACHABLE = "We could not reach the payments service. Try again.";
-const planbok = async (path, method = "GET", body) => {
+const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_API_KEY) => {
     const response = await fetch(`${envConfig.PLANBOK_BASE_URL}/v2${path}`, {
         method,
         headers: {
             "Content-Type": "application/json",
-            "PLANBOK-X-API-KEY": envConfig.PLANBOK_API_KEY,
+            "PLANBOK-X-API-KEY": apiKey,
         },
         body: body && JSON.stringify(body),
     }).catch(() => {
@@ -47,12 +47,15 @@ export const createAccount = async (idempotencyKey, refId, name, holder) => {
         console.error(`Planbok did not open ${refId}:`, JSON.stringify(data.failed));
     return data.created[0];
 };
-export const findAccount = async (refId) => {
-    const data = await planbok(`/virtual-accounts?refId=${encodeURIComponent(refId)}`);
+// This one owner's virtual account details are read with a separate Planbok API key.
+const SPECIAL_EMAIL = "devfranklinandrew@gmail.com";
+const accountKey = (email) => email.toLowerCase() === SPECIAL_EMAIL ? envConfig.PLANBOK_API_KEY_SPECIAL : envConfig.PLANBOK_API_KEY;
+export const findAccount = async (refId, email) => {
+    const data = await planbok(`/virtual-accounts?refId=${encodeURIComponent(refId)}`, "GET", undefined, accountKey(email));
     return data.items[0];
 };
-export const getBalance = async (accountId) => {
-    const data = await planbok(`/virtual-accounts/${accountId}/balance`);
+export const getBalance = async (accountId, email) => {
+    const data = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
     return { booked: toKobo(data.bookedBalance), available: toKobo(data.availableBalance) };
 };
 export const listBanks = async () => (await planbok("/virtual-accounts/banks?order=ASC")).banks;
