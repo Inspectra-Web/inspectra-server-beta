@@ -104,6 +104,8 @@ const inspectionSchema = new Schema({
         transferRef: { type: String, trim: true, default: "" },
         transferId: { type: Number },
         transferAttempts: { type: Number, default: 0, min: 0 },
+        refundId: { type: Number },
+        refundAttempts: { type: Number, default: 0, min: 0 },
         dispute: {
             reason: {
                 type: String,

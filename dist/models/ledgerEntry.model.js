@@ -6,6 +6,7 @@ export const LEDGER_KINDS = [
     "commission",
     "withdrawal",
     "refund",
+    "forfeit",
     "reversal",
 ];
 const text = () => ({ type: String, trim: true, default: "" });
