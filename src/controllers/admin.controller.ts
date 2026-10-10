@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import type { PipelineStage, Types } from "mongoose";
+import { Types, trusted, type PipelineStage } from "mongoose";
 
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
@@ -59,6 +59,7 @@ import {
   listRealtorsSchema,
   listRequestsSchema,
   listingIdSchema,
+  requestIdSchema,
   listUsersSchema,
   listVirtualAccountsSchema,
   listWalletsSchema,
@@ -1604,6 +1605,53 @@ const requestRow = (row: RequestRow) => ({
   },
 });
 
+/** The state, the seeker and their contact preferences, shared by the list and the detail. */
+const requestJoins: PipelineStage[] = [
+  { $addFields: { state: requestState } },
+  { $lookup: { from: "users", localField: "seeker", foreignField: "_id", as: "seeker" } },
+  // A request whose account is gone has nobody to notify, so it drops out.
+  { $unwind: "$seeker" },
+  {
+    $lookup: {
+      from: "profiles",
+      localField: "seeker._id",
+      foreignField: "user",
+      as: "profile",
+    },
+  },
+  { $unwind: { path: "$profile", preserveNullAndEmptyArrays: true } },
+  {
+    $addFields: {
+      whatsapp: { $ifNull: ["$profile.whatsapp", ""] },
+      contactMeans: { $ifNull: ["$profile.contactMeans", ""] },
+    },
+  },
+];
+
+const requestProjection = {
+  intent: 1,
+  category: 1,
+  type: 1,
+  city: 1,
+  areas: 1,
+  budgetMin: 1,
+  budgetMax: 1,
+  bedrooms: 1,
+  timeline: 1,
+  notes: 1,
+  state: 1,
+  expiresAt: 1,
+  createdAt: 1,
+  whatsapp: 1,
+  contactMeans: 1,
+  "seeker._id": 1,
+  "seeker.fullname": 1,
+  "seeker.email": 1,
+  "seeker.phone": 1,
+  "seeker.avatar": 1,
+  "seeker.emailVerified": 1,
+};
+
 export const listRequests = async (req: Request, res: Response): Promise<void> => {
   const { q, state, city, intent, page, limit } = listRequestsSchema.parse(req.query);
 
@@ -1614,27 +1662,7 @@ export const listRequests = async (req: Request, res: Response): Promise<void> =
   if (city !== "all") filters.push({ $match: { city } });
   if (intent !== "all") filters.push({ $match: { intent } });
 
-  const pipeline: PipelineStage[] = [
-    { $addFields: { state: requestState } },
-    { $lookup: { from: "users", localField: "seeker", foreignField: "_id", as: "seeker" } },
-    // A request whose account is gone has nobody to notify, so it drops out.
-    { $unwind: "$seeker" },
-    {
-      $lookup: {
-        from: "profiles",
-        localField: "seeker._id",
-        foreignField: "user",
-        as: "profile",
-      },
-    },
-    { $unwind: { path: "$profile", preserveNullAndEmptyArrays: true } },
-    {
-      $addFields: {
-        whatsapp: { $ifNull: ["$profile.whatsapp", ""] },
-        contactMeans: { $ifNull: ["$profile.contactMeans", ""] },
-      },
-    },
-  ];
+  const pipeline: PipelineStage[] = [...requestJoins];
 
   if (q) {
     const pattern = new RegExp(escapeRegex(q), "i");
@@ -1657,31 +1685,7 @@ export const listRequests = async (req: Request, res: Response): Promise<void> =
         { $sort: { createdAt: -1, _id: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
-        {
-          $project: {
-            intent: 1,
-            category: 1,
-            type: 1,
-            city: 1,
-            areas: 1,
-            budgetMin: 1,
-            budgetMax: 1,
-            bedrooms: 1,
-            timeline: 1,
-            notes: 1,
-            state: 1,
-            expiresAt: 1,
-            createdAt: 1,
-            whatsapp: 1,
-            contactMeans: 1,
-            "seeker._id": 1,
-            "seeker.fullname": 1,
-            "seeker.email": 1,
-            "seeker.phone": 1,
-            "seeker.avatar": 1,
-            "seeker.emailVerified": 1,
-          },
-        },
+        { $project: requestProjection },
       ],
       total: [...filters, { $count: "count" }],
       states: [{ $group: { _id: "$state", count: { $sum: 1 } } }],
@@ -1708,6 +1712,30 @@ export const listRequests = async (req: Request, res: Response): Promise<void> =
       total,
       pages: Math.max(1, Math.ceil(total / limit)),
     },
+  });
+};
+
+/** One request, plus how many live ones its seeker holds against the cap of three. */
+export const getRequest = async (req: Request, res: Response): Promise<void> => {
+  const { id } = requestIdSchema.parse(req.params);
+
+  const [row] = await PropertyRequest.aggregate<RequestRow>([
+    { $match: { _id: new Types.ObjectId(id) } },
+    ...requestJoins,
+    { $project: requestProjection },
+  ]);
+
+  if (!row) throw new AppError("No request with that id.", 404);
+
+  const seekerLive = await PropertyRequest.countDocuments({
+    seeker: row.seeker._id,
+    status: "active",
+    expiresAt: trusted({ $gt: new Date() }),
+  });
+
+  res.status(200).json({
+    status: "success",
+    data: { request: { ...requestRow(row), seekerLive } },
   });
 };
 

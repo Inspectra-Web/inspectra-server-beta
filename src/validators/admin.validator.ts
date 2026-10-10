@@ -233,3 +233,7 @@ export const listRequestsSchema = z.object({
 });
 
 export type ListRequestsQuery = z.infer<typeof listRequestsSchema>;
+
+export const requestIdSchema = z.object({
+  id: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid request id"),
+});
