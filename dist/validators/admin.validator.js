@@ -174,4 +174,7 @@ export const listRequestsSchema = z.object({
         .max(PAGE_SIZE_MAX, `Ask for at most ${PAGE_SIZE_MAX} per page`)
         .default(PAGE_SIZE),
 });
+export const requestIdSchema = z.object({
+    id: z.string().regex(/^[0-9a-f]{24}$/i, "That is not a valid request id"),
+});
 //# sourceMappingURL=admin.validator.js.map
