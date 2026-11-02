@@ -26,6 +26,11 @@ export const registerSchema = z
     confirmPassword: z.string("Required").min(1, "Confirm your password"),
     // Admin is assigned, never self-registered.
     role: z.enum(["seeker", "realtor"]),
+    // The registration link the realtor course hands out when its video ends.
+    invite: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i, "That registration link is not valid")
+      .optional(),
   })
   .refine((v) => v.password === v.confirmPassword, passwordsMatch);
 export type RegisterInput = z.infer<typeof registerSchema>;

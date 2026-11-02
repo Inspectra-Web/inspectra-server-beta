@@ -26,6 +26,13 @@ import {
   setRealtorSubscription,
   updateUserStatus,
 } from "../controllers/admin.controller.js";
+import {
+  getAdminCourse,
+  listEnrollments,
+  saveCourse,
+  setCourseStatus,
+  uploadCourseAsset,
+} from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -35,6 +42,8 @@ import {
   userStatusSchema,
 } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
+import { courseStatusSchema, saveCourseSchema } from "../validators/course.validator.js";
+import { courseUpload } from "../services/upload.service.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 
 const tooManyAttempts: RequestHandler = (_req, _res, next) =>
@@ -131,5 +140,24 @@ router.patch(
   validate(setSubscriptionSchema),
   setRealtorSubscription,
 );
+
+// The realtor course. Literal paths, so they sit clear of every :id route above.
+router.get("/course", protect, restrictTo("admin"), getAdminCourse);
+router.put("/course", protect, restrictTo("admin"), validate(saveCourseSchema), saveCourse);
+router.patch(
+  "/course/status",
+  protect,
+  restrictTo("admin"),
+  validate(courseStatusSchema),
+  setCourseStatus,
+);
+router.post(
+  "/course/upload",
+  protect,
+  restrictTo("admin"),
+  courseUpload.single("file"),
+  uploadCourseAsset,
+);
+router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
 
 export default router;

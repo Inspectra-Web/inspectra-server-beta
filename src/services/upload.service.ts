@@ -9,10 +9,13 @@ import AppError from "../error/app.error.js";
 export const AVATAR_MAX_MB = 2;
 export const PHOTO_MAX_MB = 5;
 export const DOCUMENT_MAX_MB = 10;
+export const COURSE_VIDEO_MAX_MB = 100;
 
 const AVATAR_FOLDER = "inspectra/avatars";
 const PHOTO_FOLDER = "inspectra/properties";
 const DOCUMENT_FOLDER = "inspectra/documents";
+const COURSE_FOLDER = "inspectra/course";
+const COVER_WIDTH = 1920;
 const AVATAR_SIZE = 512;
 const PHOTO_WIDTH = 1600;
 const PHOTO_HEIGHT = 1200;
@@ -43,7 +46,7 @@ export const avatarUpload = multer({
 const send = (
   buffer: Buffer,
   folder: string,
-  resourceType: "image" | "auto",
+  resourceType: "image" | "auto" | "video",
 ): Promise<UploadedFile> =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -246,3 +249,37 @@ export const destroyAsset = async (
 };
 
 export const destroyAvatar = (publicId: string): Promise<void> => destroyAsset(publicId);
+
+/* ------------------------------------------------------------------ *
+ * The realtor course: one cover image and one video, uploaded by an admin.
+ * ------------------------------------------------------------------ */
+
+// One file, an image or a video. Which one is allowed is the controller's call, because
+// it knows whether a cover or the video was asked for.
+export const courseUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: COURSE_VIDEO_MAX_MB * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
+      cb(null, true);
+      return;
+    }
+
+    cb(new AppError("Upload an image for the cover or a video file.", 400));
+  },
+});
+
+// No watermark: the cover is INSPECTRA's own marketing, not a realtor's listing photo.
+export const uploadCourseCover = async (buffer: Buffer): Promise<UploadedImage> => {
+  const image = await sharp(buffer)
+    .rotate()
+    .resize(COVER_WIDTH, undefined, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+
+  return send(image, COURSE_FOLDER, "image");
+};
+
+// Sent as-is; Cloudinary transcodes on delivery.
+export const uploadCourseVideo = (buffer: Buffer): Promise<UploadedFile> =>
+  send(buffer, COURSE_FOLDER, "video");

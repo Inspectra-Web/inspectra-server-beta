@@ -1053,6 +1053,45 @@ export const sendPaymentReceipt = (to: string, payment: PaymentBrief): void =>
     }),
   );
 
+export interface CourseAccessBrief {
+  name: string;
+  reference: string;
+  amount: number;
+  channel: string;
+  url: string;
+}
+
+/**
+ * The course link, to a guest who has just paid. A notification: the money is banked by
+ * the time this fires, so a Resend outage must not fail the request. The link is the
+ * buyer's only way back to the video, so the email says to keep it.
+ */
+export const sendCourseAccess = (to: string, course: CourseAccessBrief): void =>
+  notify(course.reference, () =>
+    sendEmail({
+      to,
+      subject: "Your INSPECTRA realtor course is ready",
+      ...layout({
+        eyebrow: "Realtor course",
+        preheader: "Payment received. Watch the course to unlock your realtor registration.",
+        reason: "You're getting this because you paid for the INSPECTRA realtor course.",
+        blocks: [
+          heading(`Your course is ready, ${displayName(course.name).split(" ")[0]}`),
+          lead(
+            "Your payment went through. Watch the video to the end and your link to register as a realtor on INSPECTRA unlocks.",
+          ),
+          slip({ ref: course.reference, status: "Paid", tone: "verified", title: "Realtor course" }),
+          rows([
+            ["Amount", naira.format(course.amount)],
+            ["Paid by", channelName(course.channel || "card")],
+          ]),
+          button("Watch the course", course.url),
+          note("Keep this email. The link above is how you come back to the video, and it is yours alone."),
+        ],
+      }),
+    }),
+  );
+
 export interface VirtualAccountBrief {
   accountNumber: string;
   accountName: string;

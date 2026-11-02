@@ -1,4 +1,5 @@
 import envConfig from "../config/env.config.js";
+import AppError from "../error/app.error.js";
 
 /**
  * Flutterwave v3 transfers, over plain fetch like the checkout in payment.controller.
@@ -115,6 +116,113 @@ export const getTransfer = async (id: number): Promise<FlwTransfer> => {
   const body = (await response.json().catch(() => ({}))) as { data?: FlwTransfer };
 
   if (!response.ok || !body.data) throw new Error(`Could not read transfer ${id}`);
+
+  return body.data;
+};
+
+/* ------------------------------------------------------------------ *
+ * Checkout: a hosted Flutterwave page, and the read-back that is the only
+ * trusted thing about a charge. Shared by plan, inspection and course payments.
+ * ------------------------------------------------------------------ */
+
+export interface FlwTransaction {
+  id: number;
+  tx_ref: string;
+  flw_ref: string;
+  amount: number;
+  currency: string;
+  status: string;
+  payment_type?: string;
+  card?: { last_4digits?: string; type?: string };
+  meta?: {
+    reference?: string;
+    user?: string;
+    tier?: string;
+    cadence?: string;
+    kind?: string;
+    inspection?: string;
+    // A course buyer is a guest, so their checkout carries who they are.
+    fullname?: string;
+    email?: string;
+    phone?: string;
+  };
+}
+
+// CLIENT_URL is written with a trailing slash in some environments, and appending a path
+// to it would give a double slash the router never matches.
+const clientOrigin = envConfig.CLIENT_URL.replace(/\/+$/, "");
+
+/** Opens a hosted checkout and hands back the link to send the payer to. `returnPath` is
+ *  a client route; the client origin, not the API, so a session cookie stays first-party. */
+export const createCheckout = async (input: {
+  reference: string;
+  amount: number;
+  currency: string;
+  customer: { email: string; name: string; phone?: string };
+  description: string;
+  returnPath: string;
+  meta: Record<string, string | undefined>;
+}): Promise<string> => {
+  const response = await fetch(`${envConfig.FLW_BASE_URL}/payments`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      tx_ref: input.reference,
+      amount: input.amount,
+      currency: input.currency,
+      redirect_url: `${clientOrigin}${input.returnPath}`,
+      customer: {
+        email: input.customer.email,
+        name: input.customer.name,
+        phonenumber: input.customer.phone ?? "",
+      },
+      // Flutterwave fetches the logo itself, so it has to be a public URL. The symbol,
+      // not the wordmark: the checkout sets it beside the title in a small square.
+      customizations: {
+        title: "INSPECTRA",
+        description: input.description,
+        logo: `${clientOrigin}/inspectra-symbol.png`,
+      },
+      // No payment_plan: that would pin the method to card, and bank transfer and USSD
+      // carry real volume here. meta carries enough to rebuild the row from nothing.
+      meta: input.meta,
+    }),
+  });
+
+  if (!response.ok)
+    throw new AppError("We could not reach the payment service. Try again.", 502);
+
+  const body = (await response.json()) as { status?: string; data?: { link?: string } };
+
+  if (body.status !== "success" || !body.data?.link)
+    throw new AppError("We could not start that payment. Try again.", 502);
+
+  return body.data.link;
+};
+
+/**
+ * Reads a transaction back from Flutterwave.
+ *
+ * Nothing is credited on anybody's say-so: not the browser's, which can put any
+ * transaction id in the URL, and not the webhook's, whose header proves the sender but
+ * says nothing about the amount. This call is the only trusted thing about a payment.
+ */
+export const verifyTransaction = async (id: number): Promise<FlwTransaction> => {
+  const response = await fetch(`${envConfig.FLW_BASE_URL}/transactions/${id}/verify`, {
+    headers,
+  });
+
+  // Flutterwave answers 400, not 404, for an id it has never seen. Both mean the id is
+  // wrong rather than the service being down.
+  if (response.status === 400 || response.status === 404)
+    throw new AppError("We could not find that payment.", 404);
+
+  if (!response.ok)
+    throw new AppError("We could not reach the payment service. Try again.", 502);
+
+  const body = (await response.json()) as { data?: FlwTransaction };
+
+  if (!body.data) throw new AppError("We could not find that payment.", 404);
 
   return body.data;
 };
