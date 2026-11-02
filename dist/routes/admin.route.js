@@ -52,7 +52,7 @@ router.patch("/realtors/:id/subscription", protect, restrictTo("admin"), validat
 router.get("/course", protect, restrictTo("admin"), getAdminCourse);
 router.put("/course", protect, restrictTo("admin"), validate(saveCourseSchema), saveCourse);
 router.patch("/course/status", protect, restrictTo("admin"), validate(courseStatusSchema), setCourseStatus);
-router.post("/course/upload", protect, restrictTo("admin"), courseUpload.single("file"), uploadCourseAsset);
+router.post("/course/upload", protect, restrictTo("admin"), courseUpload.single("courseAsset"), uploadCourseAsset);
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
 export default router;
 //# sourceMappingURL=admin.route.js.map

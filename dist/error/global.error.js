@@ -2,7 +2,7 @@ import { MulterError } from "multer";
 import { ZodError } from "zod";
 import envConfig from "../config/env.config.js";
 import AppError from "./app.error.js";
-import { AVATAR_MAX_MB, DOCUMENT_MAX_MB, PHOTO_MAX_MB, } from "../services/upload.service.js";
+import { AVATAR_MAX_MB, COURSE_VIDEO_MAX_MB, DOCUMENT_MAX_MB, PHOTO_MAX_MB, } from "../services/upload.service.js";
 const handleCastError = (error) => new AppError(`Invalid ${error.path}: ${error.value}`, 400);
 const handleDuplicateKeyError = (error) => {
     const field = Object.keys(error.keyValue)[0];
@@ -20,6 +20,8 @@ const SIZE_LIMITS = {
     selfie: AVATAR_MAX_MB,
     photos: PHOTO_MAX_MB,
     document: DOCUMENT_MAX_MB,
+    // The realtor course cover or video. Cloudinary's Free plan caps a video at 100MB.
+    courseAsset: COURSE_VIDEO_MAX_MB,
 };
 const handleMulterError = (error) => {
     if (error.code === "LIMIT_FILE_SIZE") {
