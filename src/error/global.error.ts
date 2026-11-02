@@ -6,6 +6,7 @@ import envConfig from "../config/env.config.js";
 import AppError from "./app.error.js";
 import {
   AVATAR_MAX_MB,
+  COURSE_VIDEO_MAX_MB,
   DOCUMENT_MAX_MB,
   PHOTO_MAX_MB,
 } from "../services/upload.service.js";
@@ -35,6 +36,8 @@ const SIZE_LIMITS: Record<string, number> = {
   selfie: AVATAR_MAX_MB,
   photos: PHOTO_MAX_MB,
   document: DOCUMENT_MAX_MB,
+  // The realtor course cover or video. Cloudinary's Free plan caps a video at 100MB.
+  courseAsset: COURSE_VIDEO_MAX_MB,
 };
 
 const handleMulterError = (error: MulterError) => {

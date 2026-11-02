@@ -155,7 +155,7 @@ router.post(
   "/course/upload",
   protect,
   restrictTo("admin"),
-  courseUpload.single("file"),
+  courseUpload.single("courseAsset"),
   uploadCourseAsset,
 );
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
