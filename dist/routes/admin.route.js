@@ -1,11 +1,14 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, getRequest, getRequestDemand, listDisputes, listPayments, listRealtors, listRequests, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
+import { getAdminCourse, listEnrollments, saveCourse, setCourseStatus, uploadCourseAsset, } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { decideDisputeSchema, reviewListingSchema, userStatusSchema, } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
+import { courseStatusSchema, saveCourseSchema } from "../validators/course.validator.js";
+import { courseUpload } from "../services/upload.service.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 const tooManyAttempts = (_req, _res, next) => next(new AppError("Too many attempts. Please try again later.", 429));
 const adminLimiter = rateLimit({
@@ -45,5 +48,11 @@ router.patch("/users/:id/status", protect, restrictTo("admin"), validate(userSta
 // Granting a plan lives here rather than on the subscription router, which answers to
 // realtors only. Same reason the listing verdict sits on this one.
 router.patch("/realtors/:id/subscription", protect, restrictTo("admin"), validate(setSubscriptionSchema), setRealtorSubscription);
+// The realtor course. Literal paths, so they sit clear of every :id route above.
+router.get("/course", protect, restrictTo("admin"), getAdminCourse);
+router.put("/course", protect, restrictTo("admin"), validate(saveCourseSchema), saveCourse);
+router.patch("/course/status", protect, restrictTo("admin"), validate(courseStatusSchema), setCourseStatus);
+router.post("/course/upload", protect, restrictTo("admin"), courseUpload.single("file"), uploadCourseAsset);
+router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
 export default router;
 //# sourceMappingURL=admin.route.js.map

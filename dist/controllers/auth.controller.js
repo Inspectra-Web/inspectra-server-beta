@@ -1,8 +1,10 @@
 import { trusted } from "mongoose";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
+import Enrollment from "../models/enrollment.model.js";
 import User, { hashToken, publicUser } from "../models/user.model.js";
 import { sendPasswordChanged, sendRealtorJoined, sendResetEmail, sendVerifyEmail, sendWelcome, } from "../services/email.service.js";
+import { enrollmentByInvite } from "../services/course.service.js";
 import { ensureProfile } from "../services/profile.service.js";
 import { cookieOptions, sendAuthCookie } from "../services/token.service.js";
 /**
@@ -23,14 +25,56 @@ export const createAccount = async (input) => {
         verifyUrl: `${envConfig.CLIENT_URL}/verify-email?token=${verifyToken}`,
     };
 };
+/**
+ * A realtor account is opened by the invite the realtor course hands out, for the email
+ * that bought it. The invite is claimed before the account is created, so two sign-ups
+ * racing on one invite cannot both get through, and released again if the account then
+ * fails (a taken email, say), so a mistake does not burn it.
+ */
+const claimInvite = async (invite, email) => {
+    if (!invite)
+        throw new AppError("Realtor accounts start with the realtor course.", 403);
+    const enrollment = await enrollmentByInvite(invite);
+    if (enrollment.email !== email)
+        throw new AppError("Register with the email you enrolled in the course with.", 400);
+    const claimed = await Enrollment.findOneAndUpdate({ _id: enrollment._id, registeredAt: null }, { $set: { registeredAt: new Date() } }, { returnDocument: "after" });
+    if (!claimed)
+        throw new AppError("This registration link has already been used. Sign in instead.", 409);
+    return claimed;
+};
 export const register = async (req, res) => {
-    const { fullname, email, password, role } = req.body;
-    const { user, verifyUrl } = await createAccount({ fullname, email, password, role });
-    await sendVerifyEmail(user.email, verifyUrl);
+    const { fullname, email, password, role, invite } = req.body;
+    const enrollment = role === "realtor" ? await claimInvite(invite, email) : null;
+    let account;
+    try {
+        account = await createAccount({ fullname, email, password, role });
+    }
+    catch (error) {
+        if (enrollment)
+            await Enrollment.updateOne({ _id: enrollment._id }, { $unset: { registeredAt: 1 } });
+        throw error;
+    }
+    const { user, verifyUrl } = account;
+    if (enrollment)
+        await Enrollment.updateOne({ _id: enrollment._id }, { $set: { registeredUser: user._id } });
+    // The account exists (and a realtor's invite is spent) whatever the mailer does next, so a
+    // failed send is reported, not thrown. Answering with an error here would tell someone
+    // with a working account to start again, and a used invite cannot. Resend from sign-in
+    // or the sign-up page covers the missing email.
+    let emailSent = true;
+    try {
+        await sendVerifyEmail(user.email, verifyUrl);
+    }
+    catch (error) {
+        emailSent = false;
+        console.error(`Verification email failed for ${user.email}:`, error);
+    }
     res.status(201).json({
         status: "success",
-        message: "Account created. Check your email to verify your address.",
-        data: { user: publicUser(user) },
+        message: emailSent
+            ? "Account created. Check your email to verify your address."
+            : "Account created, but the verification email did not send. Ask for a new link.",
+        data: { user: publicUser(user), emailSent },
     });
 };
 export const verifyEmail = async (req, res) => {

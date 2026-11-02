@@ -5,91 +5,37 @@ import AppError from "../error/app.error.js";
 import Inspection, { inspectionRecord } from "../models/inspection.model.js";
 import Payment, { publicPayment, } from "../models/payment.model.js";
 import { CADENCES, PLANS, TIERS, planPrice, publicSubscription, } from "../models/subscription.model.js";
+import { COURSE_REFERENCE_PREFIX } from "../models/enrollment.model.js";
 import User from "../models/user.model.js";
+import { creditEnrollment, enrollmentFor } from "../services/course.service.js";
 import { sendPaymentReceipt } from "../services/email.service.js";
 import { holdEscrow, settleTransfer } from "../services/escrow.service.js";
-import { getTransfer } from "../services/flutterwave.service.js";
+import { createCheckout, getTransfer, verifyTransaction, } from "../services/flutterwave.service.js";
 import { entitlements, listingAllowance, periodFor, resolveSubscription, syncHiddenListings, } from "../services/subscription.service.js";
 import { listPaymentsSchema, paymentReferenceSchema, } from "../validators/payment.validator.js";
 import { inspectionIdSchema } from "../validators/inspection.validator.js";
-const flwHeaders = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${envConfig.FLW_SECRET_KEY}`,
-};
-// CLIENT_URL is written with a trailing slash in some environments, and appending a path
-// to it would give a double slash the router never matches.
-const clientOrigin = envConfig.CLIENT_URL.replace(/\/+$/, "");
-/** Opens a hosted checkout and hands back the link to send the payer to. `returnPath`
- *  is a client route the payer can reach signed in, inside their own console. */
-const createCharge = async (payment, user, description, returnPath) => {
-    const response = await fetch(`${envConfig.FLW_BASE_URL}/payments`, {
-        method: "POST",
-        headers: flwHeaders,
-        body: JSON.stringify({
-            tx_ref: payment.reference,
-            amount: payment.amount,
-            currency: payment.currency,
-            // The client origin, not the API. The session cookie is only first-party there,
-            // so a return to the API would land the realtor signed out.
-            redirect_url: `${clientOrigin}${returnPath}`,
-            customer: {
-                email: user.email,
-                name: user.fullname,
-                phonenumber: user.phone ?? "",
-            },
-            // Flutterwave fetches the logo itself, so it has to be a public URL. The symbol,
-            // not the wordmark: the checkout sets it beside the title in a small square.
-            customizations: {
-                title: "INSPECTRA",
-                description,
-                logo: `${clientOrigin}/inspectra-symbol.png`,
-            },
-            // No payment_plan: that would pin the method to card, and bank transfer and USSD
-            // carry real volume here. Renewal is a fresh charge, not an auto-debit.
-            //
-            // meta carries enough to rebuild this payment from nothing. An abandoned attempt
-            // is deleted, so a realtor who leaves the tab open and pays an hour later would
-            // otherwise arrive with money spent and no row to put it against.
-            meta: {
-                reference: payment.reference,
-                user: payment.user.toString(),
-                kind: payment.kind,
-                tier: payment.tier,
-                cadence: payment.cadence,
-                inspection: payment.inspection?.toString(),
-            },
-        }),
-    });
-    if (!response.ok)
-        throw new AppError("We could not reach the payment service. Try again.", 502);
-    const body = (await response.json());
-    if (body.status !== "success" || !body.data?.link)
-        throw new AppError("We could not start that payment. Try again.", 502);
-    return body.data.link;
-};
-/**
- * Reads a transaction back from Flutterwave.
+/** A plan or inspection charge, through the shared Flutterwave checkout. `returnPath`
+ *  is a client route the payer can reach signed in, inside their own console.
  *
- * Nothing is credited on anybody's say-so: not the browser's, which can put any
- * transaction id in the URL, and not the webhook's, whose header proves the sender but
- * says nothing about the amount. This call is the only trusted thing about a payment.
- */
-const verifyTransaction = async (id) => {
-    const response = await fetch(`${envConfig.FLW_BASE_URL}/transactions/${id}/verify`, {
-        headers: flwHeaders,
-    });
-    // Flutterwave answers 400, not 404, for an id it has never seen. Both mean the id is
-    // wrong rather than the service being down, and saying "we could not reach" to someone
-    // holding a bad reference sends them chasing the wrong problem.
-    if (response.status === 400 || response.status === 404)
-        throw new AppError("We could not find that payment.", 404);
-    if (!response.ok)
-        throw new AppError("We could not reach the payment service. Try again.", 502);
-    const body = (await response.json());
-    if (!body.data)
-        throw new AppError("We could not find that payment.", 404);
-    return body.data;
-};
+ *  meta carries enough to rebuild this payment from nothing. An abandoned attempt is
+ *  deleted, so a realtor who leaves the tab open and pays an hour later would otherwise
+ *  arrive with money spent and no row to put it against. */
+const createCharge = (payment, user, description, returnPath) => createCheckout({
+    reference: payment.reference,
+    amount: payment.amount,
+    currency: payment.currency,
+    customer: { email: user.email, name: user.fullname, phone: user.phone },
+    description,
+    returnPath,
+    meta: {
+        reference: payment.reference,
+        user: payment.user.toString(),
+        kind: payment.kind,
+        tier: payment.tier,
+        cadence: payment.cadence,
+        inspection: payment.inspection?.toString(),
+    },
+});
 /* ------------------------------------------------------------------ */
 /** Narrow a string off Flutterwave's meta back into our own vocabulary. */
 const tierOf = (value) => TIERS.find((t) => t === value) ?? null;
@@ -421,9 +367,17 @@ export const flutterwaveWebhook = async (req, res) => {
         // have Flutterwave redeliver a charge that genuinely failed, forever.
         try {
             const flw = await verifyTransaction(data.id);
-            const payment = await paymentFor(flw);
-            if (payment && payment.status === "pending")
-                await creditPayment(payment, flw);
+            // A guest's course charge has no Payment row; its enrollment carries it.
+            if (flw.tx_ref.startsWith(COURSE_REFERENCE_PREFIX)) {
+                const enrollment = await enrollmentFor(flw);
+                if (enrollment && enrollment.status === "pending")
+                    await creditEnrollment(enrollment, flw);
+            }
+            else {
+                const payment = await paymentFor(flw);
+                if (payment && payment.status === "pending")
+                    await creditPayment(payment, flw);
+            }
         }
         catch (error) {
             console.error(`Webhook credit failed for ${data.tx_ref}:`, error);

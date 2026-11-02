@@ -7,6 +7,7 @@ import envConfig from "./env.config.js";
 import globalErrorHandler, { notFound } from "../error/global.error.js";
 import adminRoute from "../routes/admin.route.js";
 import authRoute from "../routes/auth.route.js";
+import courseRoute from "../routes/course.route.js";
 import identityRoute from "../routes/identity.route.js";
 import inquiryRoute from "../routes/inquiry.route.js";
 import inspectionRoute from "../routes/inspection.route.js";
@@ -40,6 +41,7 @@ const appConfig = (app) => {
     app.use("/api/v1/requests", requestRoute);
     app.use("/api/v1/subscription", subscriptionRoute);
     app.use("/api/v1/payments", paymentRoute);
+    app.use("/api/v1/course", courseRoute);
     app.use("/api/v1/virtual-accounts", virtualAccountRoute);
     app.use("/api/v1/wallets", walletRoute);
     app.use("/api/v1/admin", adminRoute);
