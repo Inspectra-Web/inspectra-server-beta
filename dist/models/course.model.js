@@ -9,6 +9,8 @@ const courseSchema = new Schema({
     description: text(),
     cover: text(),
     videoUrl: text(),
+    coverPublicId: text(),
+    videoPublicId: text(),
     minutes: { type: Number, min: [0, "Length cannot be negative"], default: 0 },
     price: {
         type: Number,

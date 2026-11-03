@@ -186,11 +186,11 @@ export const destroyAvatar = (publicId) => destroyAsset(publicId);
 /* ------------------------------------------------------------------ *
  * The realtor course: one cover image and one video, uploaded by an admin.
  * ------------------------------------------------------------------ */
-// One file, an image or a video. Which one is allowed is the controller's call, because
-// it knows whether a cover or the video was asked for.
+// Up to two files on a course save: a new cover and a new video. Which field holds which
+// type is the controller's check.
 export const courseUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: COURSE_VIDEO_MAX_MB * 1024 * 1024, files: 1 },
+    limits: { fileSize: COURSE_VIDEO_MAX_MB * 1024 * 1024, files: 2 },
     fileFilter: (_req, file, cb) => {
         if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
             cb(null, true);
@@ -210,4 +210,12 @@ export const uploadCourseCover = async (buffer) => {
 };
 // Sent as-is; Cloudinary transcodes on delivery.
 export const uploadCourseVideo = (buffer) => send(buffer, COURSE_FOLDER, "video");
+/**
+ * The Cloudinary id behind a course file URL, for rows saved before the id was stored.
+ * Only files in the course folder qualify, so a pasted link elsewhere is never touched.
+ */
+export const courseAssetId = (url) => {
+    const match = /^https:\/\/res\.cloudinary\.com\/[^/]+\/(?:image|video)\/upload\/(?:v\d+\/)?(inspectra\/course\/[^/.]+)\.[a-z0-9]+$/i.exec(url);
+    return match?.[1] ?? "";
+};
 //# sourceMappingURL=upload.service.js.map

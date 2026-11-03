@@ -44,9 +44,6 @@ export const enrollmentReferenceSchema = z.object({
 });
 export const accessSchema = z.object({ access: secret("course link") });
 export const inviteSchema = z.object({ invite: secret("registration link") });
-export const courseUploadSchema = z.object({
-    kind: z.enum(["cover", "video"], "Upload a cover or a video"),
-});
 const STATUS_FILTERS = ["all", ...ENROLLMENT_STATUSES];
 export const listEnrollmentsSchema = z.object({
     q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
