@@ -21,13 +21,18 @@ import {
 } from "../services/course.service.js";
 import { sendCourseAccess } from "../services/email.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
-import { uploadCourseCover, uploadCourseVideo } from "../services/upload.service.js";
+import {
+  courseAssetId,
+  destroyAsset,
+  uploadCourseCover,
+  uploadCourseVideo,
+} from "../services/upload.service.js";
 import {
   accessSchema,
-  courseUploadSchema,
   enrollmentReferenceSchema,
   inviteSchema,
   listEnrollmentsSchema,
+  saveCourseSchema,
   type CourseStatusInput,
   type EnrollInput,
   type SaveCourseInput,
@@ -168,18 +173,85 @@ export const getAdminCourse = async (_req: Request, res: Response): Promise<void
   res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
 };
 
-/** Saved whole. A published course may not be saved into a state it could not publish in. */
+type CourseFiles = { courseCover?: Express.Multer.File[]; courseVideo?: Express.Multer.File[] };
+
+/** The details ride as JSON in the `course` field of a multipart body, beside any files. */
+const readCourseBody = (req: Request): SaveCourseInput => {
+  const raw: unknown = req.body?.course;
+  if (typeof raw !== "string") throw new AppError("Send the course details.", 400);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new AppError("The course details are not valid.", 400);
+  }
+
+  return saveCourseSchema.parse(parsed);
+};
+
+/**
+ * Saved whole, new files included. A cover or video reaches Cloudinary only here, so an
+ * edit that is reloaded or discarded never leaves a file behind; if the save then fails,
+ * what was just uploaded is deleted. Once it succeeds, a replaced file is deleted too.
+ * A published course may not be saved into a state it could not publish in.
+ */
 export const saveCourse = async (req: Request, res: Response): Promise<void> => {
-  const body: SaveCourseInput = req.body;
+  const body = readCourseBody(req);
+  const files = (req.files ?? {}) as CourseFiles;
+  const coverFile = files.courseCover?.[0];
+  const videoFile = files.courseVideo?.[0];
+
+  if (coverFile && !coverFile.mimetype.startsWith("image/"))
+    throw new AppError("The cover must be an image.", 400);
+  if (videoFile && !videoFile.mimetype.startsWith("video/"))
+    throw new AppError("Upload a video file.", 400);
 
   const course = await theCourse();
-  course.set(body);
+  const before = {
+    cover: course.cover,
+    coverId: course.coverPublicId || courseAssetId(course.cover),
+    video: course.videoUrl,
+    videoId: course.videoPublicId || courseAssetId(course.videoUrl),
+  };
 
-  const missing = missingForPublish(course);
-  if (course.status === "published" && missing.length)
-    throw new AppError(`A published course needs a ${missing.join(", ")}.`, 400);
+  const uploaded: { id: string; type: "image" | "video" }[] = [];
+  try {
+    const next = {
+      ...body,
+      // A link that changed by hand is no longer a file this course uploaded.
+      coverPublicId: body.cover === before.cover ? before.coverId : "",
+      videoPublicId: body.videoUrl === before.video ? before.videoId : "",
+    };
 
-  await course.save();
+    if (coverFile) {
+      const file = await uploadCourseCover(coverFile.buffer);
+      uploaded.push({ id: file.publicId, type: "image" });
+      next.cover = file.url;
+      next.coverPublicId = file.publicId;
+    }
+    if (videoFile) {
+      const file = await uploadCourseVideo(videoFile.buffer);
+      uploaded.push({ id: file.publicId, type: "video" });
+      next.videoUrl = file.url;
+      next.videoPublicId = file.publicId;
+    }
+
+    course.set(next);
+
+    const missing = missingForPublish(course);
+    if (course.status === "published" && missing.length)
+      throw new AppError(`A published course needs a ${missing.join(", ")}.`, 400);
+
+    await course.save();
+  } catch (error) {
+    await Promise.all(uploaded.map(({ id, type }) => destroyAsset(id, type)));
+    throw error;
+  }
+
+  // Nothing points at a replaced file any more. destroyAsset never throws.
+  if (course.cover !== before.cover && before.coverId) await destroyAsset(before.coverId, "image");
+  if (course.videoUrl !== before.video && before.videoId) await destroyAsset(before.videoId, "video");
 
   res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
 };
@@ -197,23 +269,6 @@ export const setCourseStatus = async (req: Request, res: Response): Promise<void
   await course.save();
 
   res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
-};
-
-/** One file to Cloudinary, answered with its URL. The admin saves the URL with the course. */
-export const uploadCourseAsset = async (req: Request, res: Response): Promise<void> => {
-  const { kind } = courseUploadSchema.parse(req.query);
-  const file = req.file;
-
-  if (!file) throw new AppError("Choose a file to upload.", 400);
-
-  const wanted = kind === "cover" ? "image/" : "video/";
-  if (!file.mimetype.startsWith(wanted))
-    throw new AppError(kind === "cover" ? "The cover must be an image." : "Upload a video file.", 400);
-
-  const uploaded =
-    kind === "cover" ? await uploadCourseCover(file.buffer) : await uploadCourseVideo(file.buffer);
-
-  res.status(201).json({ status: "success", data: { url: uploaded.url } });
 };
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

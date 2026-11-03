@@ -18,6 +18,9 @@ export interface ICourse {
   description: string;
   cover: string;
   videoUrl: string;
+  /** Cloudinary ids of files this course uploaded, so a replaced one can be deleted. Never sent out. */
+  coverPublicId: string;
+  videoPublicId: string;
   /** Length of the video, shown on the sales page. */
   minutes: number;
   /** Naira. Every enrollment is priced from this, never from a request. */
@@ -39,6 +42,8 @@ const courseSchema = new Schema<ICourse>(
     description: text(),
     cover: text(),
     videoUrl: text(),
+    coverPublicId: text(),
+    videoPublicId: text(),
     minutes: { type: Number, min: [0, "Length cannot be negative"], default: 0 },
     price: {
       type: Number,

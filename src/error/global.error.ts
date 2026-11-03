@@ -36,8 +36,9 @@ const SIZE_LIMITS: Record<string, number> = {
   selfie: AVATAR_MAX_MB,
   photos: PHOTO_MAX_MB,
   document: DOCUMENT_MAX_MB,
-  // The realtor course cover or video. Cloudinary's Free plan caps a video at 100MB.
-  courseAsset: COURSE_VIDEO_MAX_MB,
+  // The realtor course files. Cloudinary's Free plan caps a video at 100MB.
+  courseCover: COURSE_VIDEO_MAX_MB,
+  courseVideo: COURSE_VIDEO_MAX_MB,
 };
 
 const handleMulterError = (error: MulterError) => {

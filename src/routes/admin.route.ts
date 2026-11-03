@@ -31,7 +31,6 @@ import {
   listEnrollments,
   saveCourse,
   setCourseStatus,
-  uploadCourseAsset,
 } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
@@ -42,7 +41,7 @@ import {
   userStatusSchema,
 } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
-import { courseStatusSchema, saveCourseSchema } from "../validators/course.validator.js";
+import { courseStatusSchema } from "../validators/course.validator.js";
 import { courseUpload } from "../services/upload.service.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 
@@ -143,20 +142,24 @@ router.patch(
 
 // The realtor course. Literal paths, so they sit clear of every :id route above.
 router.get("/course", protect, restrictTo("admin"), getAdminCourse);
-router.put("/course", protect, restrictTo("admin"), validate(saveCourseSchema), saveCourse);
+// Multipart: the details as JSON in `course`, plus any new cover or video. Files reach
+// Cloudinary only as part of a save, so an abandoned edit never leaves one behind.
+router.put(
+  "/course",
+  protect,
+  restrictTo("admin"),
+  courseUpload.fields([
+    { name: "courseCover", maxCount: 1 },
+    { name: "courseVideo", maxCount: 1 },
+  ]),
+  saveCourse,
+);
 router.patch(
   "/course/status",
   protect,
   restrictTo("admin"),
   validate(courseStatusSchema),
   setCourseStatus,
-);
-router.post(
-  "/course/upload",
-  protect,
-  restrictTo("admin"),
-  courseUpload.single("courseAsset"),
-  uploadCourseAsset,
 );
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
 
