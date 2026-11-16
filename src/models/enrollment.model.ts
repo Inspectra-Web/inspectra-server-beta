@@ -2,12 +2,14 @@ import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 import validator from "validator";
 
 /**
- * One guest buying the realtor course. A guest has no account, so this row carries its own
- * payment instead of a `Payment` (whose `user` is required and whose ledger assumes a
- * realtor). The verify-then-claim discipline is the same.
+ * One person buying the realtor course. The account is opened at checkout and linked
+ * through `registeredUser`; rows from before that were bought by guests, so the row still
+ * carries its own payment instead of a `Payment`. The verify-then-claim discipline is the
+ * same.
  *
- * Two secrets ride on it, stored only as hashes: `access` opens the video, `invite` opens
- * realtor sign-up after the video ends. course.service derives both from the id.
+ * Two secrets ride on it, stored only as hashes: `access` opens the video, and `invite`
+ * opens realtor sign-up for a guest row with no account yet. course.service derives both
+ * from the id.
  */
 
 export type EnrollmentStatus = "pending" | "paid" | "completed";
@@ -35,7 +37,9 @@ export interface IEnrollment {
   accessHash?: string;
   inviteHash?: string;
   completedAt?: Date;
+  /** When the account was linked: at checkout, or when a guest's invite was used. */
   registeredAt?: Date;
+  /** The account this enrollment belongs to. */
   registeredUser?: Types.ObjectId;
 
   createdAt: Date;
@@ -92,6 +96,8 @@ enrollmentSchema.index({ inviteHash: 1 }, { unique: true, sparse: true });
 // The admin table, newest first, and the one-checkout-per-email sweep.
 enrollmentSchema.index({ createdAt: -1, _id: -1 });
 enrollmentSchema.index({ email: 1, status: 1 });
+// A signed-in realtor's own enrollment.
+enrollmentSchema.index({ registeredUser: 1, createdAt: -1 });
 
 /** Stamped once, from the id, like a payment's. Mongoose 9 passes no `next`. */
 enrollmentSchema.pre("validate", function (this: EnrollmentDoc) {

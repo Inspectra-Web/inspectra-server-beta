@@ -22,6 +22,7 @@ export interface IUser {
   avatarId?: string;
   profile?: Types.ObjectId;
   emailVerified: boolean;
+  courseLocked: boolean;
   emailVerifyToken?: string;
   emailVerifyExpires?: Date;
   passwordChangedAt?: Date;
@@ -85,6 +86,9 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     // Everything auth does not need lives on the profile. Set once, at register.
     profile: { type: Schema.Types.ObjectId, ref: "Profile" },
     emailVerified: { type: Boolean, default: false },
+    // A realtor who opened their account at the course checkout, until the video is
+    // finished. Defaults false, so realtors who joined before the course are never locked.
+    courseLocked: { type: Boolean, default: false },
     emailVerifyToken: { type: String, select: false },
     emailVerifyExpires: { type: Date, select: false },
     passwordChangedAt: { type: Date, select: false },
@@ -158,6 +162,7 @@ export const publicUser = (user: UserDoc) => ({
   avatar: user.avatar,
   phone: user.phone,
   emailVerified: user.emailVerified,
+  courseLocked: user.courseLocked,
   createdAt: user.createdAt,
 });
 

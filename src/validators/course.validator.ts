@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { COURSE_STATUSES } from "../models/course.model.js";
 import { ENROLLMENT_STATUSES, type EnrollmentStatus } from "../models/enrollment.model.js";
-import { email } from "./auth.validator.js";
+import { email, password, passwordsMatch } from "./auth.validator.js";
 
 const PAGE_SIZE = 10;
 const PAGE_SIZE_MAX = 48;
@@ -14,16 +14,20 @@ const secret = (label: string) =>
   z.string().regex(/^[0-9a-f]{64}$/i, `That ${label} is not valid`);
 
 /**
- * A guest buying the course. Strict, and carrying no amount: the price is read off the
- * course document, so the body has no way to name its own.
+ * The checkout that opens the realtor account too. Strict, and carrying no amount: the
+ * price is read off the course document, so the body has no way to name its own.
  */
-export const enrollSchema = z.strictObject({
-  fullname: z.string("Required").trim().min(3, "Enter your full name").max(120),
-  email,
-  phone: z.string("Required").trim().min(7, "Enter a valid phone number").max(20),
-});
+export const joinCourseSchema = z
+  .strictObject({
+    fullname: z.string("Required").trim().min(3, "Enter your full name").max(120),
+    email,
+    phone: z.string("Required").trim().min(7, "Enter a valid phone number").max(20),
+    password,
+    confirmPassword: z.string("Required").min(1, "Confirm your password"),
+  })
+  .refine((v) => v.password === v.confirmPassword, passwordsMatch);
 
-export type EnrollInput = z.infer<typeof enrollSchema>;
+export type JoinCourseInput = z.infer<typeof joinCourseSchema>;
 
 /** The transaction id on Flutterwave's redirect: a claim to check, not proof. */
 export const verifyEnrollmentSchema = z.strictObject({

@@ -51,8 +51,9 @@ const publicRealtor = (row: PublicRealtorRow) => ({
  * profile so a realtor hidden from one cannot be reached through the other.
  */
 const vettedStages: PipelineStage[] = [
-  // Suspended accounts stay off the public site whatever their checks say.
-  { $match: { role: "realtor", status: "active" } },
+  // Suspended accounts stay off the public site whatever their checks say, and so does an
+  // account the course has not opened yet.
+  { $match: { role: "realtor", status: "active", courseLocked: { $ne: true } } },
   {
     $lookup: { from: "profiles", localField: "_id", foreignField: "user", as: "profile" },
   },

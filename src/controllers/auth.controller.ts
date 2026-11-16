@@ -30,6 +30,7 @@ interface NewAccount {
   password: string;
   role: "seeker" | "realtor";
   phone?: string;
+  courseLocked?: boolean;
 }
 
 /**
@@ -44,8 +45,9 @@ export const createAccount = async (input: NewAccount) => {
 
   const profile = await ensureProfile(user);
 
-  // Ahead of the verification send: if that fails the account still exists.
-  if (user.role === "realtor")
+  // Ahead of the verification send: if that fails the account still exists. A realtor
+  // opened at the course checkout is announced when the course is finished instead.
+  if (user.role === "realtor" && !user.courseLocked)
     sendRealtorJoined({ id: String(user._id), name: user.fullname, email: user.email });
 
   return {

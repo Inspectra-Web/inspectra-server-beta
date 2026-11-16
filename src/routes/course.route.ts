@@ -2,16 +2,19 @@ import { Router, type RequestHandler } from "express";
 import rateLimit from "express-rate-limit";
 
 import {
-  enroll,
+  checkoutCourse,
   finishCourse,
   getCourse,
   getInvite,
   getLearnerCourse,
+  getMyEnrollment,
+  joinCourse,
   verifyEnrollment,
 } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
+import { protect } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
-import { enrollSchema, verifyEnrollmentSchema } from "../validators/course.validator.js";
+import { joinCourseSchema, verifyEnrollmentSchema } from "../validators/course.validator.js";
 
 const tooManyRequests: RequestHandler = (_req, _res, next) =>
   next(new AppError("Too many attempts. Please try again later.", 429));
@@ -34,11 +37,15 @@ const lookupLimiter = rateLimit({
   handler: tooManyRequests,
 });
 
-// All public: the buyer is a guest. Possession of the link or invite is the credential.
+// Public, bar the signed-in pair: possession of the link or invite is the credential.
+// /me and /checkout use protect alone, not restrictTo("realtor"), which refuses the
+// course-locked realtors they exist for.
 const router = Router();
 
 router.get("/", getCourse);
-router.post("/enroll", enrollLimiter, validate(enrollSchema), enroll);
+router.post("/join", enrollLimiter, validate(joinCourseSchema), joinCourse);
+router.get("/me", protect, getMyEnrollment);
+router.post("/checkout", protect, enrollLimiter, checkoutCourse);
 router.post("/enroll/:reference/verify", validate(verifyEnrollmentSchema), verifyEnrollment);
 router.get("/learn/:access", lookupLimiter, getLearnerCourse);
 router.post("/learn/:access/finish", lookupLimiter, finishCourse);
