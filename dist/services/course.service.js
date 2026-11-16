@@ -2,9 +2,9 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Course from "../models/course.model.js";
 import Enrollment from "../models/enrollment.model.js";
-import { hashToken } from "../models/user.model.js";
+import User, { hashToken } from "../models/user.model.js";
 import { fingerprint } from "./crypto.service.js";
-import { sendCourseAccess } from "./email.service.js";
+import { sendCourseAccess, sendRealtorJoined } from "./email.service.js";
 /**
  * The course link and the registration invite are derived from the enrollment id with the
  * server's key, not drawn at random. The redirect and the webhook both settle most
@@ -31,12 +31,19 @@ export const enrollmentFor = async (flw) => {
         return existing;
     if (flw.status !== "successful")
         return null;
-    const { fullname, email, phone } = flw.meta ?? {};
+    const { fullname, email, phone, user } = flw.meta ?? {};
     if (!fullname || !email || !phone)
         return null;
     const course = await theCourse();
     console.warn(`Rebuilding enrollment ${flw.tx_ref}: its attempt row was already gone.`);
-    return Enrollment.create({ fullname, email, phone, reference: flw.tx_ref, amount: course.price });
+    return Enrollment.create({
+        fullname,
+        email,
+        phone,
+        reference: flw.tx_ref,
+        amount: course.price,
+        ...(user && { registeredUser: user, registeredAt: new Date() }),
+    });
 };
 /**
  * Turns a verified charge into a paid enrollment, exactly once.
@@ -87,16 +94,22 @@ export const enrollmentByAccess = async (access) => {
     return enrollment;
 };
 /**
- * The video ended: the enrollment is completed and the invite is handed out. Safe to call
- * again, which is how a returning learner gets their invite back. Once the invite has
- * been used, there is nothing left to hand out.
+ * The video ended. An enrollment with an account unlocks that account's console, and the
+ * admins hear a realtor joined once, on the unlock. A guest row from before accounts were
+ * opened at checkout gets its sign-up invite instead. Safe to call again: a returning
+ * guest gets the same invite back, and an unlocked account stays unlocked.
  */
-export const issueInvite = async (enrollment) => {
-    if (enrollment.registeredAt)
-        throw new AppError("You have already registered. Sign in instead.", 409);
-    const invite = inviteFor(enrollment._id);
+export const completeEnrollment = async (enrollment) => {
     enrollment.status = "completed";
     enrollment.completedAt ??= new Date();
+    if (enrollment.registeredUser) {
+        await enrollment.save({ validateModifiedOnly: true });
+        const unlocked = await User.findOneAndUpdate({ _id: enrollment.registeredUser, courseLocked: true }, { $set: { courseLocked: false } }, { returnDocument: "after" });
+        if (unlocked)
+            sendRealtorJoined({ id: String(unlocked._id), name: unlocked.fullname, email: unlocked.email });
+        return null;
+    }
+    const invite = inviteFor(enrollment._id);
     enrollment.inviteHash = hashToken(invite);
     await enrollment.save({ validateModifiedOnly: true });
     return invite;

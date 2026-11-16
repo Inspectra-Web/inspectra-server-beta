@@ -41,6 +41,8 @@ enrollmentSchema.index({ inviteHash: 1 }, { unique: true, sparse: true });
 // The admin table, newest first, and the one-checkout-per-email sweep.
 enrollmentSchema.index({ createdAt: -1, _id: -1 });
 enrollmentSchema.index({ email: 1, status: 1 });
+// A signed-in realtor's own enrollment.
+enrollmentSchema.index({ registeredUser: 1, createdAt: -1 });
 /** Stamped once, from the id, like a payment's. Mongoose 9 passes no `next`. */
 enrollmentSchema.pre("validate", function () {
     if (!this.reference)

@@ -57,10 +57,18 @@ export const optionalAuth = async (req, _res, next) => {
     }
     next();
 };
-/** Synchronous, so it hands the error to next() rather than throwing. */
+/**
+ * Synchronous, so it hands the error to next() rather than throwing. A realtor whose
+ * account was opened at the course checkout is refused every realtor route until the
+ * course is finished; the course's own signed-in routes use protect alone.
+ */
 export const restrictTo = (...roles) => (req, _res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
         next(new AppError("You do not have permission to perform this action", 403));
+        return;
+    }
+    if (req.user.role === "realtor" && req.user.courseLocked) {
+        next(new AppError("Finish the realtor course to open your console.", 403));
         return;
     }
     next();

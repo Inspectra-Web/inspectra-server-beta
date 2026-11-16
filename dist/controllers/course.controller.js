@@ -2,8 +2,10 @@ import { trusted } from "mongoose";
 import AppError from "../error/app.error.js";
 import Course, { fullCourse, missingForPublish, publicCourse } from "../models/course.model.js";
 import Enrollment, { adminEnrollment, learnerEnrollment, } from "../models/enrollment.model.js";
-import { accessFor, courseLink, creditEnrollment, enrollmentByAccess, enrollmentByInvite, enrollmentFor, issueInvite, theCourse, } from "../services/course.service.js";
-import { sendCourseAccess } from "../services/email.service.js";
+import User from "../models/user.model.js";
+import { createAccount } from "./auth.controller.js";
+import { accessFor, completeEnrollment, courseLink, creditEnrollment, enrollmentByAccess, enrollmentByInvite, enrollmentFor, theCourse, } from "../services/course.service.js";
+import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
 import { courseAssetId, destroyAsset, uploadCourseCover, uploadCourseVideo, } from "../services/upload.service.js";
 import { accessSchema, enrollmentReferenceSchema, inviteSchema, listEnrollmentsSchema, saveCourseSchema, } from "../validators/course.validator.js";
@@ -13,41 +15,124 @@ export const getCourse = async (_req, res) => {
     const course = await Course.findOne({ status: "published" });
     res.status(200).json({ status: "success", data: { course: course && publicCourse(course) } });
 };
-/**
- * A guest starting the checkout. Priced off the course, never the request. Someone who
- * already paid is not charged twice: their link is mailed again instead.
- */
-export const enroll = async (req, res) => {
-    const { fullname, email, phone } = req.body;
+const PAID_STATUSES = ["paid", "completed"];
+const PAID = trusted({ $in: PAID_STATUSES });
+const publishedCourse = async () => {
     const course = await Course.findOne({ status: "published" });
     if (!course)
         throw new AppError("The realtor course is not open yet.", 409);
-    const paid = await Enrollment.findOne({ email, status: trusted({ $in: ["paid", "completed"] }) });
-    if (paid) {
-        if (paid.registeredAt)
-            throw new AppError("You have already registered as a realtor. Sign in instead.", 409);
-        sendCourseAccess(paid.email, {
-            name: paid.fullname,
-            reference: paid.reference,
-            amount: paid.amount,
-            channel: paid.channel,
-            url: courseLink(accessFor(paid._id)),
-        });
-        throw new AppError("You have already paid for the course. We have emailed your link again.", 409);
-    }
-    // One checkout per email: an attempt nobody completed is not a record of anything.
-    await Enrollment.deleteMany({ email, status: "pending" });
-    const enrollment = await Enrollment.create({ fullname, email, phone, amount: course.price });
-    const link = await createCheckout({
-        reference: enrollment.reference,
+    return course;
+};
+/** Nobody is charged twice: a paid buyer has their link mailed again instead. */
+const refuseRepeatBuyer = async (email) => {
+    const paid = await Enrollment.findOne({ email, status: PAID });
+    if (!paid)
+        return;
+    if (paid.registeredAt)
+        throw new AppError("You have already paid for the course. Sign in instead.", 409);
+    sendCourseAccess(paid.email, {
+        name: paid.fullname,
+        reference: paid.reference,
+        amount: paid.amount,
+        channel: paid.channel,
+        url: courseLink(accessFor(paid._id)),
+    });
+    throw new AppError("You have already paid for the course. We have emailed your link again.", 409);
+};
+/** Priced off the enrollment, which was priced off the course, never the request. */
+const openCheckout = (enrollment) => {
+    const { fullname, email, phone, reference } = enrollment;
+    return createCheckout({
+        reference,
         amount: enrollment.amount,
         currency: enrollment.currency,
         customer: { email, name: fullname, phone },
         description: "INSPECTRA realtor course",
         returnPath: "/course/callback",
-        meta: { reference: enrollment.reference, kind: "course", fullname, email, phone },
+        // Enough to rebuild the row from nothing, account link included.
+        meta: {
+            reference,
+            kind: "course",
+            fullname,
+            email,
+            phone,
+            ...(enrollment.registeredUser && { user: String(enrollment.registeredUser) }),
+        },
     });
+};
+/**
+ * The checkout that opens the realtor account in the same submit, locked until the video
+ * is finished. The account is saved before the checkout opens, so a checkout that fails
+ * leaves an account that can sign in and pay from there.
+ */
+export const joinCourse = async (req, res) => {
+    const { fullname, email, phone, password } = req.body;
+    const course = await publishedCourse();
+    // Ahead of the write, for a message that says what to do. The unique index still
+    // catches a race, as a 409 from the global handler.
+    if (await User.exists({ email }))
+        throw new AppError("An account with this email already exists. Sign in to buy the course.", 409);
+    await refuseRepeatBuyer(email);
+    const { user, verifyUrl } = await createAccount({
+        fullname,
+        email,
+        password,
+        phone,
+        role: "realtor",
+        courseLocked: true,
+    });
+    await Enrollment.deleteMany({ email, status: "pending" });
+    const enrollment = await Enrollment.create({
+        fullname,
+        email,
+        phone,
+        amount: course.price,
+        registeredUser: user._id,
+        registeredAt: new Date(),
+    });
+    // The account exists whatever the mailer does, so a failed send is logged, not thrown.
+    // Sign-in offers a new link.
+    sendVerifyEmail(user.email, verifyUrl).catch((error) => console.error(`Verification email failed for ${user.email}:`, error));
+    const link = await openCheckout(enrollment);
     res.status(201).json({ status: "success", data: { link, reference: enrollment.reference } });
+};
+/** A signed-in realtor whose console is still locked, paying from their account. */
+export const checkoutCourse = async (req, res) => {
+    const user = req.user;
+    if (user.role !== "realtor")
+        throw new AppError("The realtor course opens realtor accounts. Use a different email.", 403);
+    if (!user.courseLocked)
+        throw new AppError("Your realtor console is already open.", 409);
+    const course = await publishedCourse();
+    if (await Enrollment.exists({ registeredUser: user._id, status: PAID }))
+        throw new AppError("You have already paid for the course. Open it from your dashboard.", 409);
+    await Enrollment.deleteMany({ registeredUser: user._id, status: "pending" });
+    const enrollment = await Enrollment.create({
+        fullname: user.fullname,
+        email: user.email,
+        phone: user.phone,
+        amount: course.price,
+        registeredUser: user._id,
+        registeredAt: new Date(),
+    });
+    const link = await openCheckout(enrollment);
+    res.status(201).json({ status: "success", data: { link, reference: enrollment.reference } });
+};
+/**
+ * The signed-in realtor's own enrollment: the latest one, paid ahead of pending. The
+ * course link comes back only once it is paid for.
+ */
+export const getMyEnrollment = async (req, res) => {
+    const mine = { registeredUser: req.user._id };
+    const enrollment = (await Enrollment.findOne({ ...mine, status: PAID }).sort({ createdAt: -1 })) ??
+        (await Enrollment.findOne(mine).sort({ createdAt: -1 }));
+    res.status(200).json({
+        status: "success",
+        data: {
+            enrollment: enrollment && learnerEnrollment(enrollment),
+            access: enrollment && enrollment.status !== "pending" ? accessFor(enrollment._id) : null,
+        },
+    });
 };
 /**
  * Where Flutterwave sends the guest back to. The transaction is always read back from
@@ -87,11 +172,14 @@ export const getLearnerCourse = async (req, res) => {
         data: { course: fullCourse(course), enrollment: learnerEnrollment(enrollment) },
     });
 };
-/** The video ended. The server cannot see a video play; the no-skip rule is the player's. */
+/**
+ * The video ended. The server cannot see a video play; the no-skip rule is the player's.
+ * `invite` is null when the enrollment already has an account, which this unlocks.
+ */
 export const finishCourse = async (req, res) => {
     const { access } = accessSchema.parse(req.params);
     const enrollment = await enrollmentByAccess(access);
-    const invite = await issueInvite(enrollment);
+    const invite = await completeEnrollment(enrollment);
     res.status(200).json({
         status: "success",
         data: { invite, enrollment: learnerEnrollment(enrollment) },
@@ -219,7 +307,12 @@ export const listEnrollments = async (req, res) => {
             ],
             total: [...statusMatch, { $count: "count" }],
             statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
-            registered: [{ $match: { registeredAt: { $exists: true } } }, { $count: "count" }],
+            // Joined: watched, with an account. An account alone is not it, since one opened at
+            // checkout exists before paying.
+            registered: [
+                { $match: { status: "completed", registeredAt: { $exists: true } } },
+                { $count: "count" },
+            ],
         },
     });
     const [result] = await Enrollment.aggregate(pipeline);
