@@ -22,7 +22,6 @@ const SIZE_LIMITS = {
     document: DOCUMENT_MAX_MB,
     // The realtor course files. Cloudinary's Free plan caps a video at 100MB.
     courseCover: COURSE_VIDEO_MAX_MB,
-    lessonVideo: COURSE_VIDEO_MAX_MB,
 };
 const handleMulterError = (error) => {
     if (error.code === "LIMIT_FILE_SIZE") {

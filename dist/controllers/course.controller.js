@@ -1,14 +1,15 @@
 import { trusted } from "mongoose";
 import AppError from "../error/app.error.js";
-import Course, { MAX_LESSONS, adminCourse, lessonOutline, missingForPublish, publicCourse, } from "../models/course.model.js";
+import Course, { MAX_LESSONS, adminCourse, liveLessons, playable, lessonOutline, missingForPublish, publicCourse, } from "../models/course.model.js";
 import Enrollment, { adminEnrollment, learnerEnrollment, } from "../models/enrollment.model.js";
 import User from "../models/user.model.js";
 import { createAccount } from "./auth.controller.js";
-import { accessFor, courseLink, creditEnrollment, enrollmentByAccess, enrollmentByInvite, enrollmentFor, lessonUnlocked, openDashboard, theCourse, watchLesson, } from "../services/course.service.js";
+import { MAX_VIDEO_BYTES, PART_SIZE, abortUpload, completeUpload, deleteVideoFile, partUrls, playbackUrl, r2Configured, startUpload, videoKeyFor, } from "../services/r2.service.js";
+import { accessFor, courseLink, creditEnrollment, enrollmentByAccess, enrollmentByInvite, enrollmentFor, openDashboard, theCourse, completeEnrollment, } from "../services/course.service.js";
 import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
-import { courseAssetId, destroyAsset, uploadCourseCover, uploadCourseVideo, } from "../services/upload.service.js";
-import { accessSchema, enrollmentReferenceSchema, inviteSchema, learnerLessonSchema, lessonParamSchema, listEnrollmentsSchema, saveCourseSchema, saveLessonSchema, } from "../validators/course.validator.js";
+import { courseAssetId, destroyAsset, uploadCourseCover, } from "../services/upload.service.js";
+import { accessSchema, enrollmentReferenceSchema, inviteSchema, lessonParamSchema, listEnrollmentsSchema, saveCourseSchema, } from "../validators/course.validator.js";
 /* Public ------------------------------------------------------------------------ */
 /** The sales page: the published course without its video, or null while in draft. */
 export const getCourse = async (_req, res) => {
@@ -172,51 +173,31 @@ export const verifyEnrollment = async (req, res) => {
 };
 /* Learner ----------------------------------------------------------------------- */
 /**
- * The course as this learner may see it: every lesson's outline, whether it is watched and
- * open, and a video link only for the open ones. A locked lesson's video stays on the
- * server, so the order is not the player's word alone.
+ * The course as a paid learner sees it: every lesson with its video, in order. Watching is
+ * not tracked (since 2026-11-17): paying is what opens the dashboard and earns the reward,
+ * so the lessons are there to dip into, any order, any part.
  */
-const learnerCourse = (course, enrollment) => {
-    const watched = new Set(enrollment.watchedLessons.map(String));
-    return {
-        ...publicCourse(course),
-        lessons: course.lessons.map((lesson, i) => {
-            const unlocked = lessonUnlocked(course, enrollment, i);
-            return {
-                ...lessonOutline(lesson),
-                watched: enrollment.status === "completed" || watched.has(String(lesson._id)),
-                unlocked,
-                videoUrl: unlocked ? lesson.videoUrl : "",
-            };
-        }),
-    };
-};
+const learnerCourse = async (course) => ({
+    ...publicCourse(course),
+    lessons: await Promise.all(liveLessons(course).map(async (lesson) => ({ ...lessonOutline(lesson), videoUrl: await videoLink(lesson) }))),
+});
+/**
+ * Where a lesson plays from: an R2 file on a link that expires within the hour, so a
+ * copied or shared link soon stops working; or an earlier upload or link, until replaced.
+ */
+const videoLink = async (lesson) => lesson.videoKey ? playbackUrl(lesson.videoKey) : lesson.videoUrl;
+/**
+ * The paid learner's course. An old guest row (no account) gets its sign-up invite here,
+ * on opening, since there is no longer a finish to hand it out at.
+ */
 export const getLearnerCourse = async (req, res) => {
     const { access } = accessSchema.parse(req.params);
     const enrollment = await enrollmentByAccess(access);
     const course = await theCourse();
+    const invite = enrollment.registeredUser ? null : await completeEnrollment(enrollment);
     res.status(200).json({
         status: "success",
-        data: { course: learnerCourse(course, enrollment), enrollment: learnerEnrollment(enrollment) },
-    });
-};
-/**
- * A lesson ended. Answers with the course as it now stands, so the next lesson's video
- * arrives with the news that it is open. `invite` is null unless an old guest row has just
- * completed.
- */
-export const finishLesson = async (req, res) => {
-    const { access, lessonId } = learnerLessonSchema.parse(req.params);
-    const enrollment = await enrollmentByAccess(access);
-    const course = await theCourse();
-    const { enrollment: updated, invite } = await watchLesson(course, enrollment, lessonId);
-    res.status(200).json({
-        status: "success",
-        data: {
-            invite,
-            course: learnerCourse(course, updated),
-            enrollment: learnerEnrollment(updated),
-        },
+        data: { course: await learnerCourse(course), enrollment: learnerEnrollment(enrollment), invite },
     });
 };
 /** Who an invite belongs to, so sign-up can fill and lock their details. */
@@ -229,9 +210,21 @@ export const getInvite = async (req, res) => {
     });
 };
 /* Admin ------------------------------------------------------------------------- */
+/** The admin course, with an expiring link to play each lesson and whether uploads can go to R2. */
+const adminView = async (course) => {
+    const view = adminCourse(course);
+    return {
+        ...view,
+        videoStorage: r2Configured(),
+        lessons: await Promise.all(view.lessons.map(async (lesson, i) => {
+            const doc = course.lessons[i];
+            return { ...lesson, videoUrl: doc && playable(doc) ? await videoLink(doc) : "" };
+        })),
+    };
+};
 export const getAdminCourse = async (_req, res) => {
     const course = await theCourse();
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 /** Multipart bodies carry their details as JSON in one named field, beside any file. */
 const readJsonField = (req, field, parse) => {
@@ -292,74 +285,140 @@ export const saveCourse = async (req, res) => {
     // Nothing points at a replaced file any more. destroyAsset never throws.
     if (course.cover !== before.cover && before.coverId)
         await destroyAsset(before.coverId, "image");
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 /* Lessons ----------------------------------------------------------------------- */
-/** The new video file on a lesson save, checked for type. */
-const lessonVideoFile = (req) => {
-    const file = req.files?.lessonVideo?.[0];
-    if (file && !file.mimetype.startsWith("video/"))
-        throw new AppError("Upload a video file.", 400);
-    return file;
-};
 const findLesson = (course, lessonId) => {
     const lesson = course.lessons.find((l) => String(l._id) === lessonId);
     if (!lesson)
         throw new AppError("That lesson is not in this course.", 404);
     return lesson;
 };
-/**
- * Writes a lesson's details and any new video, then saves the course. The same discipline
- * as the cover: a video uploaded here is deleted if the save fails, and a replaced one is
- * deleted once it succeeds.
- */
-const writeLesson = async (course, lesson, body, videoFile) => {
-    const before = {
-        video: lesson.videoUrl,
-        videoId: lesson.videoPublicId || courseAssetId(lesson.videoUrl),
-    };
-    let uploadedId = "";
-    try {
-        Object.assign(lesson, body, {
-            videoPublicId: body.videoUrl === before.video ? before.videoId : "",
-        });
-        if (videoFile) {
-            const file = await uploadCourseVideo(videoFile.buffer);
-            uploadedId = file.publicId;
-            lesson.videoUrl = file.url;
-            lesson.videoPublicId = file.publicId;
-        }
-        assertPublishable(course);
-        await course.save();
-    }
-    catch (error) {
-        await destroyAsset(uploadedId, "video");
-        throw error;
-    }
-    if (lesson.videoUrl !== before.video && before.videoId)
-        await destroyAsset(before.videoId, "video");
-};
-/** Multipart: the lesson as JSON in `lesson`, plus an optional `lessonVideo`. */
+/** A lesson's details. Its video arrives separately, through an upload to R2. */
 export const addLesson = async (req, res) => {
-    const body = readJsonField(req, "lesson", (value) => saveLessonSchema.parse(value));
-    const videoFile = lessonVideoFile(req);
+    const body = req.body;
     const course = await theCourse();
     if (course.lessons.length >= MAX_LESSONS)
         throw new AppError(`A course holds at most ${MAX_LESSONS} lessons.`, 400);
-    course.lessons.push({});
+    course.lessons.push({ title: body.title, summary: body.summary, minutes: body.minutes });
     const lesson = course.lessons.at(-1);
     if (!lesson)
         throw new AppError("The lesson could not be added.", 500);
-    await writeLesson(course, lesson, body, videoFile);
-    res.status(201).json({ status: "success", data: { course: adminCourse(course) } });
+    await writeLesson(course, lesson, body);
+    res.status(201).json({ status: "success", data: { course: await adminView(course) } });
 };
 export const updateLesson = async (req, res) => {
     const { lessonId } = lessonParamSchema.parse(req.params);
-    const body = readJsonField(req, "lesson", (value) => saveLessonSchema.parse(value));
-    const videoFile = lessonVideoFile(req);
+    const body = req.body;
     const course = await theCourse();
-    await writeLesson(course, findLesson(course, lessonId), body, videoFile);
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    await writeLesson(course, findLesson(course, lessonId), body);
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
+};
+/**
+ * Saves a lesson's details and its link. A link replaces an uploaded file, which is then
+ * deleted; an empty link keeps an uploaded file, or leaves a linked lesson with no video
+ * (hidden from realtors until it gets one). A replaced Cloudinary upload is deleted too.
+ */
+const writeLesson = async (course, lesson, body) => {
+    const before = {
+        key: lesson.videoKey,
+        link: lesson.videoUrl,
+        cloudinary: lesson.videoPublicId || courseAssetId(lesson.videoUrl),
+    };
+    const linked = body.videoUrl !== "";
+    Object.assign(lesson, {
+        title: body.title,
+        summary: body.summary,
+        minutes: body.minutes,
+        videoUrl: body.videoUrl,
+        videoPublicId: body.videoUrl === before.link ? lesson.videoPublicId : "",
+        ...(linked && { videoKey: "" }),
+    });
+    assertPublishable(course);
+    await course.save();
+    if (linked && before.key)
+        await deleteVideoFile(before.key);
+    if (body.videoUrl !== before.link && before.cloudinary)
+        await destroyAsset(before.cloudinary, "video");
+};
+/* Lesson video uploads, browser to R2 ------------------------------------------- */
+/**
+ * Starts an upload of a lesson's video. R2 opens a multipart upload; the lesson remembers
+ * it, so only this upload can sign its parts or finish. An earlier unfinished upload for
+ * the lesson is cancelled.
+ */
+export const startLessonUpload = async (req, res) => {
+    const { lessonId } = lessonParamSchema.parse(req.params);
+    const { fileName, contentType, size } = req.body;
+    const course = await theCourse();
+    const lesson = findLesson(course, lessonId);
+    const key = videoKeyFor(lessonId, fileName);
+    const uploadId = await startUpload(key, contentType);
+    const previous = { key: lesson.pendingKey, uploadId: lesson.pendingUploadId };
+    lesson.pendingKey = key;
+    lesson.pendingUploadId = uploadId;
+    await course.save();
+    await abortUpload(previous.key, previous.uploadId);
+    res.status(201).json({
+        status: "success",
+        data: { uploadId, partSize: PART_SIZE, partCount: Math.ceil(size / PART_SIZE) },
+    });
+};
+/** The pending upload a request names, or a 409 if the lesson has moved on from it. */
+const pendingUpload = (lesson, uploadId) => {
+    if (!lesson.pendingUploadId || lesson.pendingUploadId !== uploadId)
+        throw new AppError("That upload is no longer open. Start the upload again.", 409);
+    return { key: lesson.pendingKey, uploadId };
+};
+/** Signed addresses for the next few parts. Signed in batches so none sits waiting to expire. */
+export const signLessonParts = async (req, res) => {
+    const { lessonId } = lessonParamSchema.parse(req.params);
+    const { uploadId, partNumbers } = req.body;
+    const course = await theCourse();
+    const { key } = pendingUpload(findLesson(course, lessonId), uploadId);
+    res.status(200).json({ status: "success", data: { parts: await partUrls(key, uploadId, partNumbers) } });
+};
+/**
+ * Every part is up: R2 joins them, and the file becomes the lesson's video. The video it
+ * replaces, on R2 or Cloudinary, is deleted once the course is saved.
+ */
+export const completeLessonUpload = async (req, res) => {
+    const { lessonId } = lessonParamSchema.parse(req.params);
+    const { uploadId, parts, minutes } = req.body;
+    const course = await theCourse();
+    const lesson = findLesson(course, lessonId);
+    const { key } = pendingUpload(lesson, uploadId);
+    const size = await completeUpload(key, uploadId, parts);
+    if (size > MAX_VIDEO_BYTES) {
+        await deleteVideoFile(key);
+        throw new AppError("That video is over 5 GB. Compress it and upload it again.", 400);
+    }
+    const replaced = { key: lesson.videoKey, cloudinary: lesson.videoPublicId || courseAssetId(lesson.videoUrl) };
+    Object.assign(lesson, {
+        videoKey: key,
+        videoUrl: "",
+        videoPublicId: "",
+        pendingKey: "",
+        pendingUploadId: "",
+        minutes,
+    });
+    await course.save();
+    await deleteVideoFile(replaced.key);
+    await destroyAsset(replaced.cloudinary, "video");
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
+};
+/** The admin gave up on an upload: R2 drops the parts sent so far. */
+export const cancelLessonUpload = async (req, res) => {
+    const { lessonId } = lessonParamSchema.parse(req.params);
+    const { uploadId } = req.body;
+    const course = await theCourse();
+    const lesson = findLesson(course, lessonId);
+    const { key } = pendingUpload(lesson, uploadId);
+    lesson.pendingKey = "";
+    lesson.pendingUploadId = "";
+    await course.save();
+    await abortUpload(key, uploadId);
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 /** Removes a lesson and its uploaded video. A published course keeps at least one. */
 export const deleteLesson = async (req, res) => {
@@ -367,11 +426,14 @@ export const deleteLesson = async (req, res) => {
     const course = await theCourse();
     const lesson = findLesson(course, lessonId);
     const videoId = lesson.videoPublicId || courseAssetId(lesson.videoUrl);
+    const stored = { key: lesson.videoKey, pendingKey: lesson.pendingKey, uploadId: lesson.pendingUploadId };
     course.lessons.pull(lesson._id);
     assertPublishable(course);
     await course.save();
     await destroyAsset(videoId, "video");
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    await deleteVideoFile(stored.key);
+    await abortUpload(stored.pendingKey, stored.uploadId);
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 /** The lessons in a new order. The ids must be exactly the current lessons, once each. */
 export const reorderLessons = async (req, res) => {
@@ -384,7 +446,7 @@ export const reorderLessons = async (req, res) => {
     const byId = new Map(course.lessons.map((lesson) => [String(lesson._id), lesson.toObject()]));
     course.set("lessons", ids.map((id) => byId.get(id)));
     await course.save();
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 export const setCourseStatus = async (req, res) => {
     const { status } = req.body;
@@ -394,7 +456,7 @@ export const setCourseStatus = async (req, res) => {
         throw new AppError(`Add a ${missing.join(", ")} before publishing.`, 400);
     course.status = status;
     await course.save();
-    res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+    res.status(200).json({ status: "success", data: { course: await adminView(course) } });
 };
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**

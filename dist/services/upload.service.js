@@ -186,7 +186,7 @@ export const destroyAvatar = (publicId) => destroyAsset(publicId);
 /* ------------------------------------------------------------------ *
  * The realtor course: one cover image and one video, uploaded by an admin.
  * ------------------------------------------------------------------ */
-// One file per save: a course cover, or a lesson video. Which field holds which
+// One file per save: the course cover. Lesson videos go to R2 instead. Which field holds which
 // type is the controller's check.
 export const courseUpload = multer({
     storage: multer.memoryStorage(),

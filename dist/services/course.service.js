@@ -109,10 +109,11 @@ export const enrollmentByAccess = async (access) => {
     return enrollment;
 };
 /**
- * Every lesson watched. An enrollment with an account is marked completed (its dashboard
- * opened at payment; `openDashboard` again only catches anyone who paid before that). A
- * guest row from before accounts were opened at checkout gets its sign-up invite instead.
- * Safe to call again: a returning guest gets the same invite back.
+ * Hands an old guest row (paid before accounts were opened at checkout) its sign-up
+ * invite, marking it completed, which is what the invite lookup requires. Called when the
+ * guest opens their course link: watching is no longer tracked, so opening is the moment.
+ * An enrollment with an account is only marked completed. Safe to call again: a returning
+ * guest gets the same invite back.
  */
 export const completeEnrollment = async (enrollment) => {
     enrollment.status = "completed";
@@ -126,37 +127,6 @@ export const completeEnrollment = async (enrollment) => {
     enrollment.inviteHash = hashToken(invite);
     await enrollment.save({ validateModifiedOnly: true });
     return invite;
-};
-/**
- * Whether the lesson at `index` is open to this learner: everything is once the course is
- * completed; otherwise every lesson before it must have been watched.
- */
-export const lessonUnlocked = (course, enrollment, index) => {
-    if (enrollment.status === "completed")
-        return true;
-    const watched = new Set(enrollment.watchedLessons.map(String));
-    return course.lessons.slice(0, index).every((lesson) => watched.has(String(lesson._id)));
-};
-/**
- * A lesson ended. The server cannot see a video play; the no-skip rule within a lesson is
- * the player's, but the order between lessons is enforced here. When every lesson has been
- * watched the enrollment completes, which opens the dashboard (or, for an old guest row,
- * hands back its sign-up invite). Safe to repeat.
- */
-export const watchLesson = async (course, enrollment, lessonId) => {
-    const index = course.lessons.findIndex((lesson) => String(lesson._id) === lessonId);
-    const lesson = course.lessons[index];
-    if (!lesson)
-        throw new AppError("That lesson is not in this course.", 404);
-    if (!lessonUnlocked(course, enrollment, index))
-        throw new AppError("Watch the lessons before this one first.", 403);
-    const updated = (await Enrollment.findOneAndUpdate({ _id: enrollment._id }, { $addToSet: { watchedLessons: lesson._id } }, { returnDocument: "after" })) ?? enrollment;
-    const watched = new Set(updated.watchedLessons.map(String));
-    const allWatched = course.lessons.every((l) => watched.has(String(l._id)));
-    // Completing is idempotent, so an already-completed row (a lesson added after it
-    // finished) is passed through again: a guest's answer keeps carrying its invite.
-    const invite = allWatched || updated.status === "completed" ? await completeEnrollment(updated) : null;
-    return { enrollment: updated, invite };
 };
 /** The enrollment an invite belongs to, if it can still open an account. */
 export const enrollmentByInvite = async (invite) => {

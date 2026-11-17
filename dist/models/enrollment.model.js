@@ -74,7 +74,6 @@ export const learnerEnrollment = (e) => ({
     paidAt: e.paidAt,
     completedAt: e.completedAt,
     registered: !!e.registeredAt,
-    watchedLessons: e.watchedLessons ?? [],
     createdAt: e.createdAt,
 });
 const Enrollment = model("Enrollment", enrollmentSchema);

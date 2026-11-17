@@ -9,8 +9,11 @@ const text = () => ({ type: String, trim: true, default: "" });
 const lessonSchema = new Schema({
     title: text(),
     summary: text(),
+    videoKey: text(),
     videoUrl: text(),
     videoPublicId: text(),
+    pendingKey: text(),
+    pendingUploadId: text(),
     minutes: { type: Number, min: [0, "Length cannot be negative"], default: 0 },
 });
 const courseSchema = new Schema({
@@ -47,18 +50,24 @@ export const missingForPublish = (course) => {
         ["cover image", course.cover],
     ];
     const missing = fields.filter(([, value]) => !value).map(([label]) => label);
-    if (course.lessons.length === 0)
-        missing.push("lesson");
-    course.lessons.forEach((lesson, i) => {
+    const live = liveLessons(course);
+    if (live.length === 0)
+        missing.push("lesson with a video");
+    live.forEach((lesson, i) => {
         if (!lesson.title)
             missing.push(`title on lesson ${i + 1}`);
-        if (!lesson.videoUrl)
-            missing.push(`video on lesson ${i + 1}`);
     });
     return missing;
 };
+/** A lesson with a video to play. */
+export const playable = (lesson) => !!(lesson.videoKey || lesson.videoUrl);
+/**
+ * The lessons realtors and the sales page see. One still waiting for its video is left
+ * out, so a published course can take a new lesson before its upload has finished.
+ */
+export const liveLessons = (course) => course.lessons.filter(playable);
 /** The whole course's length, for the sales page. */
-export const courseMinutes = (course) => course.lessons.reduce((sum, lesson) => sum + lesson.minutes, 0);
+export const courseMinutes = (course) => liveLessons(course).reduce((sum, lesson) => sum + lesson.minutes, 0);
 /** A lesson as a visitor sees it: what it is, never the video. */
 export const lessonOutline = (lesson) => ({
     id: lesson._id,
@@ -77,12 +86,22 @@ export const publicCourse = (course) => ({
     price: course.price,
     status: course.status,
     updatedAt: course.updatedAt,
-    lessons: course.lessons.map(lessonOutline),
+    lessons: liveLessons(course).map(lessonOutline),
 });
-/** The admin: every lesson with its video. */
+/**
+ * The admin: every lesson, including one still waiting for its video, and whether each
+ * has one. The controller adds the expiring link to play it, since that needs signing.
+ */
 export const adminCourse = (course) => ({
     ...publicCourse(course),
-    lessons: course.lessons.map((lesson) => ({ ...lessonOutline(lesson), videoUrl: lesson.videoUrl })),
+    lessons: course.lessons.map((lesson) => ({
+        ...lessonOutline(lesson),
+        hasVideo: playable(lesson),
+        /** An uploaded file in R2. */
+        stored: !!lesson.videoKey,
+        /** The link the lesson plays from, for the editor; empty for an uploaded file. */
+        link: lesson.videoUrl,
+    })),
 });
 const Course = model("Course", courseSchema);
 export default Course;
