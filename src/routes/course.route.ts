@@ -3,7 +3,6 @@ import rateLimit from "express-rate-limit";
 
 import {
   checkoutCourse,
-  finishLesson,
   getCourse,
   getInvite,
   getLearnerCourse,
@@ -48,7 +47,6 @@ router.get("/me", protect, getMyEnrollment);
 router.post("/checkout", protect, enrollLimiter, checkoutCourse);
 router.post("/enroll/:reference/verify", validate(verifyEnrollmentSchema), verifyEnrollment);
 router.get("/learn/:access", lookupLimiter, getLearnerCourse);
-router.post("/learn/:access/lessons/:lessonId/finish", lookupLimiter, finishLesson);
 router.get("/invites/:invite", lookupLimiter, getInvite);
 
 export default router;

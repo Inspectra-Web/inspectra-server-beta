@@ -36,7 +36,7 @@ export interface IEnrollment {
 
   accessHash?: string;
   inviteHash?: string;
-  /** Lessons this learner has watched to the end. All of them is what `completed` means. */
+  /** Lessons watched, from when watching was tracked (until 2026-11-17). Kept, no longer written or read. */
   watchedLessons: Types.ObjectId[];
   completedAt?: Date;
   /** When the account was linked: at checkout, or when a guest's invite was used. */
@@ -136,7 +136,6 @@ export const learnerEnrollment = (e: EnrollmentRow) => ({
   paidAt: e.paidAt,
   completedAt: e.completedAt,
   registered: !!e.registeredAt,
-  watchedLessons: e.watchedLessons ?? [],
   createdAt: e.createdAt,
 });
 

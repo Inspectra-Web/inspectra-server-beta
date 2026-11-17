@@ -31,6 +31,12 @@ const envConfig = {
   // in a secrets manager before launch.
   PLANBOK_ORG_SECRET: process.env.PLANBOK_ORG_SECRET!,
   PLANBOK_WALLET_SET_ID: process.env.PLANBOK_WALLET_SET_ID!,
+  // Cloudflare R2 holds the course's lesson videos. Optional: without them lessons keep
+  // their existing videos and the upload endpoints say hosting is not set up.
+  R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+  R2_BUCKET: process.env.R2_BUCKET,
   // Read only by src/scripts/admin.script.ts, which checks them itself.
   ADMIN_EMAIL: process.env.ADMIN_EMAIL,
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,

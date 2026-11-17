@@ -16,18 +16,21 @@ export const DEFAULT_COURSE_PRICE = 10_000;
 /** Enough for a few masterclasses and the platform video, with room to grow. */
 export const MAX_LESSONS = 12;
 
-/**
- * One video in the course. Lessons are watched in their stored order, each opening the
- * next, and the last one ending opens the realtor dashboard.
- */
+/** One video in the course, listed in its stored order. Watching is not tracked. */
 export interface ILesson {
   _id: Types.ObjectId;
   title: string;
   /** A line or two on what the lesson covers. */
   summary: string;
+  /** The R2 object holding the video. Never sent out: realtors get an expiring link to it. */
+  videoKey: string;
+  /** An earlier video, uploaded to Cloudinary or linked, kept playing until replaced. */
   videoUrl: string;
-  /** Cloudinary id of the uploaded video, so a replaced one can be deleted. Never sent out. */
+  /** Cloudinary id of that earlier upload, so replacing it deletes it. Never sent out. */
   videoPublicId: string;
+  /** An R2 upload in progress: where it is going and its multipart id. Never sent out. */
+  pendingKey: string;
+  pendingUploadId: string;
   minutes: number;
 }
 
@@ -55,8 +58,11 @@ const text = () => ({ type: String, trim: true, default: "" });
 const lessonSchema = new Schema<ILesson>({
   title: text(),
   summary: text(),
+  videoKey: text(),
   videoUrl: text(),
   videoPublicId: text(),
+  pendingKey: text(),
+  pendingUploadId: text(),
   minutes: { type: Number, min: [0, "Length cannot be negative"], default: 0 },
 });
 
@@ -99,19 +105,28 @@ export const missingForPublish = (course: ICourse): string[] => {
   ];
   const missing = fields.filter(([, value]) => !value).map(([label]) => label);
 
-  if (course.lessons.length === 0) missing.push("lesson");
+  const live = liveLessons(course);
+  if (live.length === 0) missing.push("lesson with a video");
 
-  course.lessons.forEach((lesson, i) => {
+  live.forEach((lesson, i) => {
     if (!lesson.title) missing.push(`title on lesson ${i + 1}`);
-    if (!lesson.videoUrl) missing.push(`video on lesson ${i + 1}`);
   });
 
   return missing;
 };
 
+/** A lesson with a video to play. */
+export const playable = (lesson: ILesson): boolean => !!(lesson.videoKey || lesson.videoUrl);
+
+/**
+ * The lessons realtors and the sales page see. One still waiting for its video is left
+ * out, so a published course can take a new lesson before its upload has finished.
+ */
+export const liveLessons = (course: ICourse): ILesson[] => course.lessons.filter(playable);
+
 /** The whole course's length, for the sales page. */
 export const courseMinutes = (course: ICourse): number =>
-  course.lessons.reduce((sum, lesson) => sum + lesson.minutes, 0);
+  liveLessons(course).reduce((sum, lesson) => sum + lesson.minutes, 0);
 
 type CourseRow = ICourse & { _id: Types.ObjectId };
 
@@ -134,13 +149,23 @@ export const publicCourse = (course: CourseRow) => ({
   price: course.price,
   status: course.status,
   updatedAt: course.updatedAt,
-  lessons: course.lessons.map(lessonOutline),
+  lessons: liveLessons(course).map(lessonOutline),
 });
 
-/** The admin: every lesson with its video. */
+/**
+ * The admin: every lesson, including one still waiting for its video, and whether each
+ * has one. The controller adds the expiring link to play it, since that needs signing.
+ */
 export const adminCourse = (course: CourseRow) => ({
   ...publicCourse(course),
-  lessons: course.lessons.map((lesson) => ({ ...lessonOutline(lesson), videoUrl: lesson.videoUrl })),
+  lessons: course.lessons.map((lesson) => ({
+    ...lessonOutline(lesson),
+    hasVideo: playable(lesson),
+    /** An uploaded file in R2. */
+    stored: !!lesson.videoKey,
+    /** The link the lesson plays from, for the editor; empty for an uploaded file. */
+    link: lesson.videoUrl,
+  })),
 });
 
 const Course = model<ICourse>("Course", courseSchema);

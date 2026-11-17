@@ -28,12 +28,16 @@ import {
 } from "../controllers/admin.controller.js";
 import {
   addLesson,
+  cancelLessonUpload,
+  completeLessonUpload,
   deleteLesson,
   getAdminCourse,
   listEnrollments,
   reorderLessons,
   saveCourse,
   setCourseStatus,
+  signLessonParts,
+  startLessonUpload,
   updateLesson,
 } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
@@ -45,7 +49,15 @@ import {
   userStatusSchema,
 } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
-import { courseStatusSchema, lessonOrderSchema } from "../validators/course.validator.js";
+import {
+  cancelLessonUploadSchema,
+  completeLessonUploadSchema,
+  courseStatusSchema,
+  lessonOrderSchema,
+  saveLessonSchema,
+  signLessonPartsSchema,
+  startLessonUploadSchema,
+} from "../validators/course.validator.js";
 import { courseUpload } from "../services/upload.service.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 
@@ -155,10 +167,10 @@ router.put(
   courseUpload.fields([{ name: "courseCover", maxCount: 1 }]),
   saveCourse,
 );
-// Lessons, each multipart like the course: details as JSON in `lesson`, plus any new video.
-// `order` is declared before `:lessonId` so it is never read as an id.
-const lessonVideo = courseUpload.fields([{ name: "lessonVideo", maxCount: 1 }]);
-router.post("/course/lessons", protect, restrictTo("admin"), lessonVideo, addLesson);
+// Lessons: their details as JSON. A lesson's video goes from the browser straight to R2,
+// through the upload routes below. `order` is declared before `:lessonId` so it is never
+// read as an id.
+router.post("/course/lessons", protect, restrictTo("admin"), validate(saveLessonSchema), addLesson);
 router.put(
   "/course/lessons/order",
   protect,
@@ -166,8 +178,38 @@ router.put(
   validate(lessonOrderSchema),
   reorderLessons,
 );
-router.put("/course/lessons/:lessonId", protect, restrictTo("admin"), lessonVideo, updateLesson);
+router.put(
+  "/course/lessons/:lessonId",
+  protect,
+  restrictTo("admin"),
+  validate(saveLessonSchema),
+  updateLesson,
+);
 router.delete("/course/lessons/:lessonId", protect, restrictTo("admin"), deleteLesson);
+// A lesson video upload: start it, sign its parts in batches, then finish or cancel it.
+const lessonUpload = "/course/lessons/:lessonId/upload";
+router.post(lessonUpload, protect, restrictTo("admin"), validate(startLessonUploadSchema), startLessonUpload);
+router.post(
+  `${lessonUpload}/parts`,
+  protect,
+  restrictTo("admin"),
+  validate(signLessonPartsSchema),
+  signLessonParts,
+);
+router.post(
+  `${lessonUpload}/complete`,
+  protect,
+  restrictTo("admin"),
+  validate(completeLessonUploadSchema),
+  completeLessonUpload,
+);
+router.post(
+  `${lessonUpload}/cancel`,
+  protect,
+  restrictTo("admin"),
+  validate(cancelLessonUploadSchema),
+  cancelLessonUpload,
+);
 router.patch(
   "/course/status",
   protect,

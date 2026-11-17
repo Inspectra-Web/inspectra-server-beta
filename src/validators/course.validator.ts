@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { COURSE_STATUSES, MAX_LESSONS } from "../models/course.model.js";
+import { MAX_VIDEO_BYTES } from "../services/r2.service.js";
 import { ENROLLMENT_STATUSES, type EnrollmentStatus } from "../models/enrollment.model.js";
 import { email, password, passwordsMatch } from "./auth.validator.js";
 
@@ -55,25 +56,61 @@ export const saveCourseSchema = z.strictObject({
 
 export type SaveCourseInput = z.infer<typeof saveCourseSchema>;
 
-// Drive serves a viewer page, not a video, and its player reports nothing the course could
-// keep the lessons in order by.
-const lessonVideoUrl = url.refine(
-  (value) => !/(drive|docs)\.google\.com/.test(value),
-  "Google Drive links cannot play here. Use a YouTube, Vimeo or direct video link, or upload the file.",
-);
+const minutes = z.number().int("Whole minutes only").min(0).max(600);
 
-/**
- * One lesson, saved whole. The video is an uploaded file (riding beside it in the same
- * multipart body) or a link: YouTube, Vimeo, Wistia, or a direct video file.
- */
+/** A lesson's details. An uploaded video goes to R2 separately, through the upload routes. */
 export const saveLessonSchema = z.strictObject({
   title: z.string().trim().max(200),
   summary: z.string().trim().max(500),
-  videoUrl: lessonVideoUrl,
-  minutes: z.number().int("Whole minutes only").min(0).max(600),
+  /**
+   * A link to play the lesson from instead of an uploaded file: YouTube, Vimeo, Google
+   * Drive or a direct video file. Empty keeps an uploaded file. A link can be watched
+   * outside INSPECTRA; an uploaded file cannot.
+   */
+  videoUrl: url,
+  minutes,
 });
 
 export type SaveLessonInput = z.infer<typeof saveLessonSchema>;
+
+const uploadId = z.string().trim().min(1, "Missing the upload id").max(1024);
+
+/** Starting a lesson video upload. The size picks the number of parts; 5 GB at most. */
+export const startLessonUploadSchema = z.strictObject({
+  fileName: z.string().trim().min(1).max(255),
+  contentType: z.string().regex(/^video\/[\w.+-]+$/, "Upload a video file"),
+  size: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_VIDEO_BYTES, "That video is over 5 GB. Compress it and upload it again."),
+});
+
+export type StartLessonUploadInput = z.infer<typeof startLessonUploadSchema>;
+
+/** Up to 20 part addresses at a time. R2 numbers parts from 1 to 10,000. */
+export const signLessonPartsSchema = z.strictObject({
+  uploadId,
+  partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(20),
+});
+
+export type SignLessonPartsInput = z.infer<typeof signLessonPartsSchema>;
+
+/** Every part, with the ETag R2 answered its upload with, and the length read off the file. */
+export const completeLessonUploadSchema = z.strictObject({
+  uploadId,
+  parts: z
+    .array(z.strictObject({ partNumber: z.number().int().min(1).max(10_000), etag: z.string().min(1).max(200) }))
+    .min(1)
+    .max(10_000),
+  minutes: minutes.min(1, "At least 1 minute"),
+});
+
+export type CompleteLessonUploadInput = z.infer<typeof completeLessonUploadSchema>;
+
+export const cancelLessonUploadSchema = z.strictObject({ uploadId });
+
+export type CancelLessonUploadInput = z.infer<typeof cancelLessonUploadSchema>;
 
 const objectId = (label: string) => z.string().regex(/^[0-9a-f]{24}$/i, `That ${label} is not valid`);
 
@@ -99,11 +136,6 @@ export const enrollmentReferenceSchema = z.object({
 export const accessSchema = z.object({ access: secret("course link") });
 
 export const lessonParamSchema = z.object({ lessonId: objectId("lesson") });
-
-export const learnerLessonSchema = z.object({
-  access: secret("course link"),
-  lessonId: objectId("lesson"),
-});
 
 export const inviteSchema = z.object({ invite: secret("registration link") });
 
