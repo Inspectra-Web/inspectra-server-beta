@@ -190,7 +190,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     throw new AppError("Please verify your email address before logging in.", 403);
 
   if (user.role === "admin")
-    throw new AppError("Admins sign in at the admin console.", 403);
+    throw new AppError("Admins sign in at the admin dashboard.", 403);
 
   await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
