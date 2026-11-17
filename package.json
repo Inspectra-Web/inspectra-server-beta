@@ -17,6 +17,7 @@
     "backfill:slugs": "tsx src/scripts/slug.script.ts",
     "reset:views": "tsx src/scripts/views.script.ts",
     "backfill:refreshed": "tsx src/scripts/refresh.script.ts",
+    "migrate:lessons": "tsx src/scripts/lessons.script.ts",
     "migrate:db": "tsx src/scripts/migrate.script.ts"
   },
   "dependencies": {

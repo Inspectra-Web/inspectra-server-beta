@@ -2,7 +2,15 @@ import type { Request, Response } from "express";
 import { trusted, type PipelineStage, type Types } from "mongoose";
 
 import AppError from "../error/app.error.js";
-import Course, { fullCourse, missingForPublish, publicCourse } from "../models/course.model.js";
+import Course, {
+  MAX_LESSONS,
+  adminCourse,
+  lessonOutline,
+  missingForPublish,
+  publicCourse,
+  type CourseDoc,
+  type ILesson,
+} from "../models/course.model.js";
 import Enrollment, {
   adminEnrollment,
   learnerEnrollment,
@@ -14,13 +22,15 @@ import User from "../models/user.model.js";
 import { createAccount } from "./auth.controller.js";
 import {
   accessFor,
-  completeEnrollment,
   courseLink,
   creditEnrollment,
   enrollmentByAccess,
   enrollmentByInvite,
   enrollmentFor,
+  lessonUnlocked,
+  openDashboard,
   theCourse,
+  watchLesson,
 } from "../services/course.service.js";
 import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
@@ -34,11 +44,15 @@ import {
   accessSchema,
   enrollmentReferenceSchema,
   inviteSchema,
+  learnerLessonSchema,
+  lessonParamSchema,
   listEnrollmentsSchema,
   saveCourseSchema,
+  saveLessonSchema,
   type CourseStatusInput,
   type JoinCourseInput,
-  type SaveCourseInput,
+  type LessonOrderInput,
+  type SaveLessonInput,
   type VerifyEnrollmentInput,
 } from "../validators/course.validator.js";
 
@@ -153,9 +167,10 @@ export const joinCourse = async (req: Request, res: Response): Promise<void> => 
 export const checkoutCourse = async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
 
+  // Any realtor may buy it: one waiting on payment, or one whose dashboard was open before
+  // the course existed.
   if (user.role !== "realtor")
     throw new AppError("The realtor course opens realtor accounts. Use a different email.", 403);
-  if (!user.courseLocked) throw new AppError("Your realtor dashboard is already open.", 409);
 
   const course = await publishedCourse();
 
@@ -180,18 +195,27 @@ export const checkoutCourse = async (req: Request, res: Response): Promise<void>
 /**
  * The signed-in realtor's own enrollment: the latest one, paid ahead of pending. The
  * course link comes back only once it is paid for.
+ *
+ * A locked realtor who has paid is someone who paid before paying opened the dashboard;
+ * this is the request their lock screen makes, so it opens it for them here.
+ * `dashboardOpened` tells the browser to read the account again.
  */
 export const getMyEnrollment = async (req: Request, res: Response): Promise<void> => {
-  const mine = { registeredUser: req.user!._id };
+  const user = req.user!;
+  const mine = { registeredUser: user._id };
   const enrollment =
     (await Enrollment.findOne({ ...mine, status: PAID }).sort({ createdAt: -1 })) ??
     (await Enrollment.findOne(mine).sort({ createdAt: -1 }));
+
+  const paid = !!enrollment && enrollment.status !== "pending";
+  const dashboardOpened = paid && user.courseLocked ? await openDashboard(user._id) : false;
 
   res.status(200).json({
     status: "success",
     data: {
       enrollment: enrollment && learnerEnrollment(enrollment),
-      access: enrollment && enrollment.status !== "pending" ? accessFor(enrollment._id) : null,
+      access: paid ? accessFor(enrollment._id) : null,
+      dashboardOpened,
     },
   });
 };
@@ -232,6 +256,28 @@ export const verifyEnrollment = async (req: Request, res: Response): Promise<voi
 
 /* Learner ----------------------------------------------------------------------- */
 
+/**
+ * The course as this learner may see it: every lesson's outline, whether it is watched and
+ * open, and a video link only for the open ones. A locked lesson's video stays on the
+ * server, so the order is not the player's word alone.
+ */
+const learnerCourse = (course: CourseDoc, enrollment: EnrollmentDoc) => {
+  const watched = new Set(enrollment.watchedLessons.map(String));
+
+  return {
+    ...publicCourse(course),
+    lessons: course.lessons.map((lesson, i) => {
+      const unlocked = lessonUnlocked(course, enrollment, i);
+      return {
+        ...lessonOutline(lesson),
+        watched: enrollment.status === "completed" || watched.has(String(lesson._id)),
+        unlocked,
+        videoUrl: unlocked ? lesson.videoUrl : "",
+      };
+    }),
+  };
+};
+
 export const getLearnerCourse = async (req: Request, res: Response): Promise<void> => {
   const { access } = accessSchema.parse(req.params);
 
@@ -240,23 +286,29 @@ export const getLearnerCourse = async (req: Request, res: Response): Promise<voi
 
   res.status(200).json({
     status: "success",
-    data: { course: fullCourse(course), enrollment: learnerEnrollment(enrollment) },
+    data: { course: learnerCourse(course, enrollment), enrollment: learnerEnrollment(enrollment) },
   });
 };
 
 /**
- * The video ended. The server cannot see a video play; the no-skip rule is the player's.
- * `invite` is null when the enrollment already has an account, which this unlocks.
+ * A lesson ended. Answers with the course as it now stands, so the next lesson's video
+ * arrives with the news that it is open. `invite` is null unless an old guest row has just
+ * completed.
  */
-export const finishCourse = async (req: Request, res: Response): Promise<void> => {
-  const { access } = accessSchema.parse(req.params);
+export const finishLesson = async (req: Request, res: Response): Promise<void> => {
+  const { access, lessonId } = learnerLessonSchema.parse(req.params);
 
   const enrollment = await enrollmentByAccess(access);
-  const invite = await completeEnrollment(enrollment);
+  const course = await theCourse();
+  const { enrollment: updated, invite } = await watchLesson(course, enrollment, lessonId);
 
   res.status(200).json({
     status: "success",
-    data: { invite, enrollment: learnerEnrollment(enrollment) },
+    data: {
+      invite,
+      course: learnerCourse(course, updated),
+      enrollment: learnerEnrollment(updated),
+    },
   });
 };
 
@@ -277,90 +329,194 @@ export const getInvite = async (req: Request, res: Response): Promise<void> => {
 export const getAdminCourse = async (_req: Request, res: Response): Promise<void> => {
   const course = await theCourse();
 
-  res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
 };
 
-type CourseFiles = { courseCover?: Express.Multer.File[]; courseVideo?: Express.Multer.File[] };
-
-/** The details ride as JSON in the `course` field of a multipart body, beside any files. */
-const readCourseBody = (req: Request): SaveCourseInput => {
-  const raw: unknown = req.body?.course;
-  if (typeof raw !== "string") throw new AppError("Send the course details.", 400);
+/** Multipart bodies carry their details as JSON in one named field, beside any file. */
+const readJsonField = <T>(req: Request, field: string, parse: (value: unknown) => T): T => {
+  const raw: unknown = req.body?.[field];
+  if (typeof raw !== "string") throw new AppError("Send the details with the upload.", 400);
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new AppError("The course details are not valid.", 400);
+    throw new AppError("Those details are not valid.", 400);
   }
 
-  return saveCourseSchema.parse(parsed);
+  return parse(parsed);
+};
+
+/** A published course may not be saved into a state it could not publish in. */
+const assertPublishable = (course: CourseDoc): void => {
+  const missing = missingForPublish(course);
+  if (course.status === "published" && missing.length)
+    throw new AppError(`A published course needs a ${missing.join(", ")}.`, 400);
 };
 
 /**
- * Saved whole, new files included. A cover or video reaches Cloudinary only here, so an
- * edit that is reloaded or discarded never leaves a file behind; if the save then fails,
- * what was just uploaded is deleted. Once it succeeds, a replaced file is deleted too.
- * A published course may not be saved into a state it could not publish in.
+ * The course's own details, a new cover included. The cover reaches Cloudinary only here,
+ * so an edit that is reloaded or discarded never leaves a file behind; if the save then
+ * fails, what was just uploaded is deleted. Once it succeeds, a replaced cover is deleted.
  */
 export const saveCourse = async (req: Request, res: Response): Promise<void> => {
-  const body = readCourseBody(req);
-  const files = (req.files ?? {}) as CourseFiles;
-  const coverFile = files.courseCover?.[0];
-  const videoFile = files.courseVideo?.[0];
+  const body = readJsonField(req, "course", (value) => saveCourseSchema.parse(value));
+  const coverFile = (req.files as { courseCover?: Express.Multer.File[] } | undefined)?.courseCover?.[0];
 
   if (coverFile && !coverFile.mimetype.startsWith("image/"))
     throw new AppError("The cover must be an image.", 400);
-  if (videoFile && !videoFile.mimetype.startsWith("video/"))
-    throw new AppError("Upload a video file.", 400);
 
   const course = await theCourse();
   const before = {
     cover: course.cover,
     coverId: course.coverPublicId || courseAssetId(course.cover),
-    video: course.videoUrl,
-    videoId: course.videoPublicId || courseAssetId(course.videoUrl),
   };
 
-  const uploaded: { id: string; type: "image" | "video" }[] = [];
+  let uploadedId = "";
   try {
     const next = {
       ...body,
       // A link that changed by hand is no longer a file this course uploaded.
       coverPublicId: body.cover === before.cover ? before.coverId : "",
-      videoPublicId: body.videoUrl === before.video ? before.videoId : "",
     };
 
     if (coverFile) {
       const file = await uploadCourseCover(coverFile.buffer);
-      uploaded.push({ id: file.publicId, type: "image" });
+      uploadedId = file.publicId;
       next.cover = file.url;
       next.coverPublicId = file.publicId;
     }
-    if (videoFile) {
-      const file = await uploadCourseVideo(videoFile.buffer);
-      uploaded.push({ id: file.publicId, type: "video" });
-      next.videoUrl = file.url;
-      next.videoPublicId = file.publicId;
-    }
 
     course.set(next);
-
-    const missing = missingForPublish(course);
-    if (course.status === "published" && missing.length)
-      throw new AppError(`A published course needs a ${missing.join(", ")}.`, 400);
-
+    assertPublishable(course);
     await course.save();
   } catch (error) {
-    await Promise.all(uploaded.map(({ id, type }) => destroyAsset(id, type)));
+    await destroyAsset(uploadedId, "image");
     throw error;
   }
 
   // Nothing points at a replaced file any more. destroyAsset never throws.
   if (course.cover !== before.cover && before.coverId) await destroyAsset(before.coverId, "image");
-  if (course.videoUrl !== before.video && before.videoId) await destroyAsset(before.videoId, "video");
 
-  res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+};
+
+/* Lessons ----------------------------------------------------------------------- */
+
+/** The new video file on a lesson save, checked for type. */
+const lessonVideoFile = (req: Request): Express.Multer.File | undefined => {
+  const file = (req.files as { lessonVideo?: Express.Multer.File[] } | undefined)?.lessonVideo?.[0];
+  if (file && !file.mimetype.startsWith("video/")) throw new AppError("Upload a video file.", 400);
+  return file;
+};
+
+const findLesson = (course: CourseDoc, lessonId: string) => {
+  const lesson = course.lessons.find((l) => String(l._id) === lessonId);
+  if (!lesson) throw new AppError("That lesson is not in this course.", 404);
+  return lesson;
+};
+
+/**
+ * Writes a lesson's details and any new video, then saves the course. The same discipline
+ * as the cover: a video uploaded here is deleted if the save fails, and a replaced one is
+ * deleted once it succeeds.
+ */
+const writeLesson = async (
+  course: CourseDoc,
+  lesson: ILesson,
+  body: SaveLessonInput,
+  videoFile: Express.Multer.File | undefined,
+): Promise<void> => {
+  const before = {
+    video: lesson.videoUrl,
+    videoId: lesson.videoPublicId || courseAssetId(lesson.videoUrl),
+  };
+
+  let uploadedId = "";
+  try {
+    Object.assign(lesson, body, {
+      videoPublicId: body.videoUrl === before.video ? before.videoId : "",
+    });
+
+    if (videoFile) {
+      const file = await uploadCourseVideo(videoFile.buffer);
+      uploadedId = file.publicId;
+      lesson.videoUrl = file.url;
+      lesson.videoPublicId = file.publicId;
+    }
+
+    assertPublishable(course);
+    await course.save();
+  } catch (error) {
+    await destroyAsset(uploadedId, "video");
+    throw error;
+  }
+
+  if (lesson.videoUrl !== before.video && before.videoId) await destroyAsset(before.videoId, "video");
+};
+
+/** Multipart: the lesson as JSON in `lesson`, plus an optional `lessonVideo`. */
+export const addLesson = async (req: Request, res: Response): Promise<void> => {
+  const body = readJsonField(req, "lesson", (value) => saveLessonSchema.parse(value));
+  const videoFile = lessonVideoFile(req);
+
+  const course = await theCourse();
+  if (course.lessons.length >= MAX_LESSONS)
+    throw new AppError(`A course holds at most ${MAX_LESSONS} lessons.`, 400);
+
+  course.lessons.push({});
+  const lesson = course.lessons.at(-1);
+  if (!lesson) throw new AppError("The lesson could not be added.", 500);
+
+  await writeLesson(course, lesson, body, videoFile);
+
+  res.status(201).json({ status: "success", data: { course: adminCourse(course) } });
+};
+
+export const updateLesson = async (req: Request, res: Response): Promise<void> => {
+  const { lessonId } = lessonParamSchema.parse(req.params);
+  const body = readJsonField(req, "lesson", (value) => saveLessonSchema.parse(value));
+  const videoFile = lessonVideoFile(req);
+
+  const course = await theCourse();
+  await writeLesson(course, findLesson(course, lessonId), body, videoFile);
+
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+};
+
+/** Removes a lesson and its uploaded video. A published course keeps at least one. */
+export const deleteLesson = async (req: Request, res: Response): Promise<void> => {
+  const { lessonId } = lessonParamSchema.parse(req.params);
+
+  const course = await theCourse();
+  const lesson = findLesson(course, lessonId);
+  const videoId = lesson.videoPublicId || courseAssetId(lesson.videoUrl);
+
+  course.lessons.pull(lesson._id);
+  assertPublishable(course);
+  await course.save();
+
+  await destroyAsset(videoId, "video");
+
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
+};
+
+/** The lessons in a new order. The ids must be exactly the current lessons, once each. */
+export const reorderLessons = async (req: Request, res: Response): Promise<void> => {
+  const { ids }: LessonOrderInput = req.body;
+
+  const course = await theCourse();
+  const current = course.lessons.map((lesson) => String(lesson._id));
+
+  const same =
+    ids.length === current.length && new Set(ids).size === ids.length && ids.every((id) => current.includes(id));
+  if (!same) throw new AppError("The new order must list every lesson exactly once.", 400);
+
+  const byId = new Map(course.lessons.map((lesson) => [String(lesson._id), lesson.toObject()]));
+  course.set("lessons", ids.map((id) => byId.get(id)));
+  await course.save();
+
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
 };
 
 export const setCourseStatus = async (req: Request, res: Response): Promise<void> => {
@@ -375,7 +531,7 @@ export const setCourseStatus = async (req: Request, res: Response): Promise<void
   course.status = status;
   await course.save();
 
-  res.status(200).json({ status: "success", data: { course: fullCourse(course) } });
+  res.status(200).json({ status: "success", data: { course: adminCourse(course) } });
 };
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -416,10 +572,10 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
       ],
       total: [...statusMatch, { $count: "count" }],
       statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
-      // Joined: watched, with an account. An account alone is not it, since one opened at
-      // checkout exists before paying.
+      // Joined: paid, with an account, since paying is what opens the dashboard. An account
+      // alone is not it: one opened at checkout exists before paying.
       registered: [
-        { $match: { status: "completed", registeredAt: { $exists: true } } },
+        { $match: { status: { $in: PAID_STATUSES }, registeredAt: { $exists: true } } },
         { $count: "count" },
       ],
     },

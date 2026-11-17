@@ -36,6 +36,8 @@ export interface IEnrollment {
 
   accessHash?: string;
   inviteHash?: string;
+  /** Lessons this learner has watched to the end. All of them is what `completed` means. */
+  watchedLessons: Types.ObjectId[];
   completedAt?: Date;
   /** When the account was linked: at checkout, or when a guest's invite was used. */
   registeredAt?: Date;
@@ -83,6 +85,7 @@ const enrollmentSchema = new Schema<IEnrollment>(
 
     accessHash: { type: String, select: false },
     inviteHash: { type: String, select: false },
+    watchedLessons: { type: [Schema.Types.ObjectId], default: [] },
     completedAt: { type: Date },
     registeredAt: { type: Date },
     registeredUser: { type: Schema.Types.ObjectId, ref: "User" },
@@ -133,6 +136,7 @@ export const learnerEnrollment = (e: EnrollmentRow) => ({
   paidAt: e.paidAt,
   completedAt: e.completedAt,
   registered: !!e.registeredAt,
+  watchedLessons: e.watchedLessons ?? [],
   createdAt: e.createdAt,
 });
 

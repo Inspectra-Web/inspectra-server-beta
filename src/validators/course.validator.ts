@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { COURSE_STATUSES } from "../models/course.model.js";
+import { COURSE_STATUSES, MAX_LESSONS } from "../models/course.model.js";
 import { ENROLLMENT_STATUSES, type EnrollmentStatus } from "../models/enrollment.model.js";
 import { email, password, passwordsMatch } from "./auth.validator.js";
 
@@ -41,18 +41,38 @@ export type VerifyEnrollmentInput = z.infer<typeof verifyEnrollmentSchema>;
 
 const url = z.union([z.literal(""), z.url("Enter a full link starting with https://")]);
 
-/** The admin saving the course whole. Status has its own write, so it is not here. */
+/**
+ * The admin saving the course's own details. Status has its own write, and the lessons
+ * have their own endpoints, so neither is here.
+ */
 export const saveCourseSchema = z.strictObject({
   title: z.string().trim().max(200),
   subtitle: z.string().trim().max(300),
   description: z.string().trim().max(TEXT_MAX),
   cover: url,
-  videoUrl: url,
-  minutes: z.number().int("Whole minutes only").min(0).max(600),
   price: z.number().int("Whole naira only").min(100, "The course costs at least ₦100"),
 });
 
 export type SaveCourseInput = z.infer<typeof saveCourseSchema>;
+
+/** One lesson, saved whole. A new video file rides beside it in the same multipart body. */
+export const saveLessonSchema = z.strictObject({
+  title: z.string().trim().max(200),
+  summary: z.string().trim().max(500),
+  videoUrl: url,
+  minutes: z.number().int("Whole minutes only").min(0).max(600),
+});
+
+export type SaveLessonInput = z.infer<typeof saveLessonSchema>;
+
+const objectId = (label: string) => z.string().regex(/^[0-9a-f]{24}$/i, `That ${label} is not valid`);
+
+/** The new order, as every lesson id exactly once. The controller checks it is a permutation. */
+export const lessonOrderSchema = z.strictObject({
+  ids: z.array(objectId("lesson")).min(1).max(MAX_LESSONS),
+});
+
+export type LessonOrderInput = z.infer<typeof lessonOrderSchema>;
 
 export const courseStatusSchema = z.strictObject({
   status: z.enum(COURSE_STATUSES, "Choose draft or published"),
@@ -67,6 +87,13 @@ export const enrollmentReferenceSchema = z.object({
 });
 
 export const accessSchema = z.object({ access: secret("course link") });
+
+export const lessonParamSchema = z.object({ lessonId: objectId("lesson") });
+
+export const learnerLessonSchema = z.object({
+  access: secret("course link"),
+  lessonId: objectId("lesson"),
+});
 
 export const inviteSchema = z.object({ invite: secret("registration link") });
 

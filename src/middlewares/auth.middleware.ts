@@ -102,7 +102,7 @@ export const restrictTo =
     }
 
     if (req.user.role === "realtor" && req.user.courseLocked) {
-      next(new AppError("Finish the realtor course to open your dashboard.", 403));
+      next(new AppError("Complete your course payment to open your dashboard.", 403));
       return;
     }
 

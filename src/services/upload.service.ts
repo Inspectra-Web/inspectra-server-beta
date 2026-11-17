@@ -254,11 +254,11 @@ export const destroyAvatar = (publicId: string): Promise<void> => destroyAsset(p
  * The realtor course: one cover image and one video, uploaded by an admin.
  * ------------------------------------------------------------------ */
 
-// Up to two files on a course save: a new cover and a new video. Which field holds which
+// One file per save: a course cover, or a lesson video. Which field holds which
 // type is the controller's check.
 export const courseUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: COURSE_VIDEO_MAX_MB * 1024 * 1024, files: 2 },
+  limits: { fileSize: COURSE_VIDEO_MAX_MB * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
       cb(null, true);
