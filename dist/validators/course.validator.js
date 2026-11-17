@@ -40,11 +40,17 @@ export const saveCourseSchema = z.strictObject({
     cover: url,
     price: z.number().int("Whole naira only").min(100, "The course costs at least ₦100"),
 });
-/** One lesson, saved whole. A new video file rides beside it in the same multipart body. */
+// Drive serves a viewer page, not a video, and its player reports nothing the course could
+// keep the lessons in order by.
+const lessonVideoUrl = url.refine((value) => !/(drive|docs)\.google\.com/.test(value), "Google Drive links cannot play here. Use a YouTube, Vimeo or direct video link, or upload the file.");
+/**
+ * One lesson, saved whole. The video is an uploaded file (riding beside it in the same
+ * multipart body) or a link: YouTube, Vimeo, Wistia, or a direct video file.
+ */
 export const saveLessonSchema = z.strictObject({
     title: z.string().trim().max(200),
     summary: z.string().trim().max(500),
-    videoUrl: url,
+    videoUrl: lessonVideoUrl,
     minutes: z.number().int("Whole minutes only").min(0).max(600),
 });
 const objectId = (label) => z.string().regex(/^[0-9a-f]{24}$/i, `That ${label} is not valid`);
