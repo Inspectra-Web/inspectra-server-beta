@@ -1,13 +1,13 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, getRequest, getRequestDemand, listDisputes, listPayments, listRealtors, listRequests, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
-import { getAdminCourse, listEnrollments, saveCourse, setCourseStatus, } from "../controllers/course.controller.js";
+import { addLesson, deleteLesson, getAdminCourse, listEnrollments, reorderLessons, saveCourse, setCourseStatus, updateLesson, } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
 import { decideDisputeSchema, reviewListingSchema, userStatusSchema, } from "../validators/admin.validator.js";
 import { loginSchema } from "../validators/auth.validator.js";
-import { courseStatusSchema } from "../validators/course.validator.js";
+import { courseStatusSchema, lessonOrderSchema } from "../validators/course.validator.js";
 import { courseUpload } from "../services/upload.service.js";
 import { setSubscriptionSchema } from "../validators/subscription.validator.js";
 const tooManyAttempts = (_req, _res, next) => next(new AppError("Too many attempts. Please try again later.", 429));
@@ -50,12 +50,16 @@ router.patch("/users/:id/status", protect, restrictTo("admin"), validate(userSta
 router.patch("/realtors/:id/subscription", protect, restrictTo("admin"), validate(setSubscriptionSchema), setRealtorSubscription);
 // The realtor course. Literal paths, so they sit clear of every :id route above.
 router.get("/course", protect, restrictTo("admin"), getAdminCourse);
-// Multipart: the details as JSON in `course`, plus any new cover or video. Files reach
-// Cloudinary only as part of a save, so an abandoned edit never leaves one behind.
-router.put("/course", protect, restrictTo("admin"), courseUpload.fields([
-    { name: "courseCover", maxCount: 1 },
-    { name: "courseVideo", maxCount: 1 },
-]), saveCourse);
+// Multipart: the details as JSON in `course`, plus any new cover. Files reach Cloudinary
+// only as part of a save, so an abandoned edit never leaves one behind.
+router.put("/course", protect, restrictTo("admin"), courseUpload.fields([{ name: "courseCover", maxCount: 1 }]), saveCourse);
+// Lessons, each multipart like the course: details as JSON in `lesson`, plus any new video.
+// `order` is declared before `:lessonId` so it is never read as an id.
+const lessonVideo = courseUpload.fields([{ name: "lessonVideo", maxCount: 1 }]);
+router.post("/course/lessons", protect, restrictTo("admin"), lessonVideo, addLesson);
+router.put("/course/lessons/order", protect, restrictTo("admin"), validate(lessonOrderSchema), reorderLessons);
+router.put("/course/lessons/:lessonId", protect, restrictTo("admin"), lessonVideo, updateLesson);
+router.delete("/course/lessons/:lessonId", protect, restrictTo("admin"), deleteLesson);
 router.patch("/course/status", protect, restrictTo("admin"), validate(courseStatusSchema), setCourseStatus);
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
 export default router;

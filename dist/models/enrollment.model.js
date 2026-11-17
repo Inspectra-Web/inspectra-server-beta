@@ -31,6 +31,7 @@ const enrollmentSchema = new Schema({
     failureReason: text(),
     accessHash: { type: String, select: false },
     inviteHash: { type: String, select: false },
+    watchedLessons: { type: [Schema.Types.ObjectId], default: [] },
     completedAt: { type: Date },
     registeredAt: { type: Date },
     registeredUser: { type: Schema.Types.ObjectId, ref: "User" },
@@ -73,6 +74,7 @@ export const learnerEnrollment = (e) => ({
     paidAt: e.paidAt,
     completedAt: e.completedAt,
     registered: !!e.registeredAt,
+    watchedLessons: e.watchedLessons ?? [],
     createdAt: e.createdAt,
 });
 const Enrollment = model("Enrollment", enrollmentSchema);
