@@ -102,7 +102,7 @@ export const checkoutCourse = async (req, res) => {
     if (user.role !== "realtor")
         throw new AppError("The realtor course opens realtor accounts. Use a different email.", 403);
     if (!user.courseLocked)
-        throw new AppError("Your realtor console is already open.", 409);
+        throw new AppError("Your realtor dashboard is already open.", 409);
     const course = await publishedCourse();
     if (await Enrollment.exists({ registeredUser: user._id, status: PAID }))
         throw new AppError("You have already paid for the course. Open it from your dashboard.", 409);
