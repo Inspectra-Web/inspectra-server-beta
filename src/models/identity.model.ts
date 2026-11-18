@@ -3,7 +3,7 @@ import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 export type IdDocument = "nin" | "bvn";
 
 // The first try plus two retries.
-export const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 5;
 
 export interface IIdentity {
   user: Types.ObjectId;

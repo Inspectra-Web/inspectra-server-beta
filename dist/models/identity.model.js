@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 // The first try plus two retries.
-export const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 5;
 const text = () => ({ type: String, trim: true, default: "" });
 const identitySchema = new Schema({
     user: {
