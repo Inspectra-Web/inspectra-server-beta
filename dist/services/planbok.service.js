@@ -15,10 +15,13 @@ const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_AP
         throw new AppError(UNREACHABLE, 502);
     });
     const result = await response.json().catch(() => ({}));
+    const logged = `Planbok ${method} ${path} (${response.status}): ${JSON.stringify(result)}`;
+    // Every reply is logged whole, success or not.
     if (!result.success) {
-        console.error(`Planbok ${method} ${path} failed (${response.status}):`, JSON.stringify(result.errors ?? result));
+        console.error(logged);
         throw new AppError(UNREACHABLE, 502);
     }
+    console.log(logged);
     return result.data;
 };
 let publicKey = "";
