@@ -3,12 +3,7 @@ import type { Request, Response } from "express";
 import AppError from "../error/app.error.js";
 import Identity from "../models/identity.model.js";
 import Wallet, { publicWallet } from "../models/wallet.model.js";
-import {
-  createWallet,
-  findWallet,
-  getWalletBalances,
-  type PlanbokWallet,
-} from "../services/planbok.service.js";
+import { createWallet, getWalletBalances, type PlanbokWallet } from "../services/planbok.service.js";
 
 const NOT_CREATED = "We could not create your wallet. Try again later.";
 
@@ -48,9 +43,7 @@ export const openMyWallet = async (req: Request, res: Response): Promise<void> =
   let opened: PlanbokWallet | undefined;
 
   try {
-    opened =
-      (await createWallet(wallet.idempotencyKey, wallet.refId, identity.legalName)) ??
-      (await findWallet(wallet.refId));
+    opened = await createWallet(wallet.idempotencyKey, wallet.refId, identity.legalName);
   } catch (error) {
     // A Planbok refusal is logged where it happens; anything else would vanish here.
     if (!(error instanceof AppError)) console.error(`Wallet ${wallet.refId} failed:`, error);
@@ -59,7 +52,7 @@ export const openMyWallet = async (req: Request, res: Response): Promise<void> =
 
   if (!opened) {
     // Planbok refused it. Dropping the row frees the idempotency key for a fresh attempt.
-    console.error(`Wallet ${wallet.refId}: Planbok created none and has none on record.`);
+    console.error(`Wallet ${wallet.refId}: Planbok returned no wallet of its own.`);
     await wallet.deleteOne();
     throw new AppError(NOT_CREATED, 502);
   }

@@ -144,7 +144,7 @@ export const createWallet = async (
   refId: string,
   name: string,
 ): Promise<PlanbokWallet | undefined> => {
-  const data = await planbok("/organization/wallets", "POST", {
+  const data: { wallets: PlanbokWallet[] } = await planbok("/organization/wallets", "POST", {
     idempotencyKey,
     encryptedOrganizationSecret: await encryptedSecret("sign"),
     walletSetId: envConfig.PLANBOK_WALLET_SET_ID,
@@ -154,18 +154,20 @@ export const createWallet = async (
     metadata: [{ name, refId }],
   });
 
-  // A plain list, or created/failed lists like a virtual account's: a refusal can ride
-  // inside a successful reply, so the whole reply is logged when no wallet comes back.
-  const created: PlanbokWallet | undefined = Array.isArray(data) ? data[0] : data?.created?.[0];
-  if (!created) console.error(`Planbok created no wallet for ${refId}:`, JSON.stringify(data));
+  // Only a wallet carrying our refId is ours: Planbok has answered a create with another
+  // realtor's existing wallet (2026-11-21), which must never be handed to this one.
+  const wallets = data.wallets ?? [];
+  const created = wallets.find((wallet) => wallet.refId === refId);
+
+  if (!created)
+    console.error(
+      wallets.length
+        ? `Planbok answered the wallet create for ${refId} with someone else's wallet:`
+        : `Planbok created no wallet for ${refId}:`,
+      JSON.stringify(data),
+    );
 
   return created;
-};
-
-export const findWallet = async (refId: string): Promise<PlanbokWallet | undefined> => {
-  const data: PlanbokWallet[] = await planbok(`/wallets?refId=${encodeURIComponent(refId)}`);
-
-  return data[0];
 };
 
 interface PlanbokTokenBalance {
