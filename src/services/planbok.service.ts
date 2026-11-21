@@ -34,14 +34,15 @@ const planbok = async (path: string, method = "GET", body?: object, apiKey = env
       "PLANBOK-X-API-KEY": apiKey,
     },
     body: body && JSON.stringify(body),
-  }).catch(() => {
+  }).catch((error) => {
+    console.error(`Planbok ${method} ${path} unreachable:`, error.cause ?? error);
     throw new AppError(UNREACHABLE, 502);
   });
 
   const result: any = await response.json().catch(() => ({}));
 
   if (!result.success) {
-    console.error(`Planbok ${method} ${path} failed:`, result.errors?.message);
+    console.error(`Planbok ${method} ${path} failed (${response.status}):`, JSON.stringify(result.errors ?? result));
     throw new AppError(UNREACHABLE, 502);
   }
 
