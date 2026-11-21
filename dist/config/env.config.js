@@ -22,6 +22,10 @@ const envConfig = {
     FLW_BASE_URL: process.env.FLW_BASE_URL,
     FLW_SECRET_KEY: process.env.FLW_SECRET_KEY,
     FLW_WEBHOOK_HASH: process.env.FLW_WEBHOOK_HASH,
+    // Where each paid course's incentive payout goes: LambaCard's NGN account.
+    LAMBACARD_BANK_CODE: process.env.LAMBACARD_BANK_CODE,
+    LAMBACARD_ACCOUNT_NUMBER: process.env.LAMBACARD_ACCOUNT_NUMBER,
+    LAMBACARD_ACCOUNT_NAME: process.env.LAMBACARD_ACCOUNT_NAME,
     PLANBOK_BASE_URL: process.env.PLANBOK_BASE_URL || "https://api.planbok.io",
     PLANBOK_API_KEY: process.env.PLANBOK_API_KEY,
     PLANBOK_API_KEY_SPECIAL: process.env.PLANBOK_API_KEY_SPECIAL,

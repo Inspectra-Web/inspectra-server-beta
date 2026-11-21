@@ -1,7 +1,7 @@
 import { Schema, model } from "mongoose";
 export const COURSE_STATUSES = ["draft", "published"];
 /** What the course costs until the admin says otherwise. Naira. */
-export const DEFAULT_COURSE_PRICE = 10_000;
+export const DEFAULT_COURSE_PRICE = 15_000;
 /** Enough for a few masterclasses and the platform video, with room to grow. */
 export const MAX_LESSONS = 12;
 const text = () => ({ type: String, trim: true, default: "" });

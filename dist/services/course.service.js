@@ -5,6 +5,7 @@ import Enrollment from "../models/enrollment.model.js";
 import User, { hashToken } from "../models/user.model.js";
 import { fingerprint } from "./crypto.service.js";
 import { sendCourseAccess, sendRealtorJoined } from "./email.service.js";
+import { incentiveFor, startIncentive } from "./incentive.service.js";
 /**
  * The course link and the registration invite are derived from the enrollment id with the
  * server's key, not drawn at random. The redirect and the webhook both settle most
@@ -76,6 +77,7 @@ export const creditEnrollment = async (enrollment, flw) => {
     if (flw.currency !== enrollment.currency || flw.amount < enrollment.amount)
         throw new AppError("That payment does not match what was owed.", 400);
     const access = accessFor(enrollment._id);
+    const incentive = incentiveFor(enrollment.amount);
     const claimed = await Enrollment.findOneAndUpdate({ _id: enrollment._id, status: "pending" }, {
         $set: {
             status: "paid",
@@ -85,9 +87,13 @@ export const creditEnrollment = async (enrollment, flw) => {
             paidAt: new Date(),
             failureReason: "",
             accessHash: hashToken(access),
+            ...(incentive && { incentive }),
         },
     }, { returnDocument: "after" });
     if (claimed) {
+        // Not awaited: the realtor's access never waits on LambaCard's transfer.
+        if (claimed.incentive)
+            startIncentive(claimed._id).catch((error) => console.error(`Incentive for ${claimed.reference} did not start:`, error));
         sendCourseAccess(claimed.email, {
             name: claimed.fullname,
             reference: claimed.reference,

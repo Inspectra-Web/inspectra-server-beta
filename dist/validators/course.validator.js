@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { COURSE_STATUSES, MAX_LESSONS } from "../models/course.model.js";
 import { MAX_VIDEO_BYTES } from "../services/r2.service.js";
-import { ENROLLMENT_STATUSES } from "../models/enrollment.model.js";
+import { ENROLLMENT_STATUSES, INCENTIVE_PAYOUT, } from "../models/enrollment.model.js";
 import { email, password, passwordsMatch } from "./auth.validator.js";
 const PAGE_SIZE = 10;
 const PAGE_SIZE_MAX = 48;
@@ -39,7 +39,11 @@ export const saveCourseSchema = z.strictObject({
     subtitle: z.string().trim().max(300),
     description: z.string().trim().max(TEXT_MAX),
     cover: url,
-    price: z.number().int("Whole naira only").min(100, "The course costs at least ₦100"),
+    // ₦10,000 of every payment funds the realtor's incentive, so the price must clear it.
+    price: z
+        .number()
+        .int("Whole naira only")
+        .gt(INCENTIVE_PAYOUT, "The course costs more than ₦10,000, which funds the realtor's incentive"),
 });
 const minutes = z.number().int("Whole minutes only").min(0).max(600);
 /** A lesson's details. An uploaded video goes to R2 separately, through the upload routes. */
