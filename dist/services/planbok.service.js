@@ -79,16 +79,15 @@ export const createWallet = async (idempotencyKey, refId, name) => {
         accountType: "eoa",
         metadata: [{ name, refId }],
     });
-    // A plain list, or created/failed lists like a virtual account's: a refusal can ride
-    // inside a successful reply, so the whole reply is logged when no wallet comes back.
-    const created = Array.isArray(data) ? data[0] : data?.created?.[0];
+    // Only a wallet carrying our refId is ours: Planbok has answered a create with another
+    // realtor's existing wallet (2026-11-21), which must never be handed to this one.
+    const wallets = data.wallets ?? [];
+    const created = wallets.find((wallet) => wallet.refId === refId);
     if (!created)
-        console.error(`Planbok created no wallet for ${refId}:`, JSON.stringify(data));
+        console.error(wallets.length
+            ? `Planbok answered the wallet create for ${refId} with someone else's wallet:`
+            : `Planbok created no wallet for ${refId}:`, JSON.stringify(data));
     return created;
-};
-export const findWallet = async (refId) => {
-    const data = await planbok(`/wallets?refId=${encodeURIComponent(refId)}`);
-    return data[0];
 };
 // `amount` is a decimal string in token units and stays one: 18 decimals overflow a number.
 export const getWalletBalances = async (walletId) => {
