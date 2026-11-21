@@ -79,7 +79,12 @@ export const createWallet = async (idempotencyKey, refId, name) => {
         accountType: "eoa",
         metadata: [{ name, refId }],
     });
-    return data[0];
+    // A plain list, or created/failed lists like a virtual account's: a refusal can ride
+    // inside a successful reply, so the whole reply is logged when no wallet comes back.
+    const created = Array.isArray(data) ? data[0] : data?.created?.[0];
+    if (!created)
+        console.error(`Planbok created no wallet for ${refId}:`, JSON.stringify(data));
+    return created;
 };
 export const findWallet = async (refId) => {
     const data = await planbok(`/wallets?refId=${encodeURIComponent(refId)}`);

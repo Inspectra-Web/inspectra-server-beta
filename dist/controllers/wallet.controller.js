@@ -31,12 +31,15 @@ export const openMyWallet = async (req, res) => {
             (await createWallet(wallet.idempotencyKey, wallet.refId, identity.legalName)) ??
                 (await findWallet(wallet.refId));
     }
-    catch {
-        // Planbok's own reason is already in the server log; the realtor gets one plain message.
+    catch (error) {
+        // A Planbok refusal is logged where it happens; anything else would vanish here.
+        if (!(error instanceof AppError))
+            console.error(`Wallet ${wallet.refId} failed:`, error);
         throw new AppError(NOT_CREATED, 502);
     }
     if (!opened) {
         // Planbok refused it. Dropping the row frees the idempotency key for a fresh attempt.
+        console.error(`Wallet ${wallet.refId}: Planbok created none and has none on record.`);
         await wallet.deleteOne();
         throw new AppError(NOT_CREATED, 502);
     }
