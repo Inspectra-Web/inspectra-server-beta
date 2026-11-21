@@ -40,12 +40,15 @@ const planbok = async (path: string, method = "GET", body?: object, apiKey = env
   });
 
   const result: any = await response.json().catch(() => ({}));
+  const logged = `Planbok ${method} ${path} (${response.status}): ${JSON.stringify(result)}`;
 
+  // Every reply is logged whole, success or not.
   if (!result.success) {
-    console.error(`Planbok ${method} ${path} failed (${response.status}):`, JSON.stringify(result.errors ?? result));
+    console.error(logged);
     throw new AppError(UNREACHABLE, 502);
   }
 
+  console.log(logged);
   return result.data;
 };
 
