@@ -8,6 +8,7 @@ import User, { hashToken } from "../models/user.model.js";
 import { fingerprint } from "./crypto.service.js";
 import { sendCourseAccess, sendRealtorJoined } from "./email.service.js";
 import type { FlwTransaction } from "./flutterwave.service.js";
+import { incentiveFor, startIncentive } from "./incentive.service.js";
 
 /**
  * The course link and the registration invite are derived from the enrollment id with the
@@ -103,6 +104,7 @@ export const creditEnrollment = async (
     throw new AppError("That payment does not match what was owed.", 400);
 
   const access = accessFor(enrollment._id);
+  const incentive = incentiveFor(enrollment.amount);
 
   const claimed = await Enrollment.findOneAndUpdate(
     { _id: enrollment._id, status: "pending" },
@@ -115,12 +117,19 @@ export const creditEnrollment = async (
         paidAt: new Date(),
         failureReason: "",
         accessHash: hashToken(access),
+        ...(incentive && { incentive }),
       },
     },
     { returnDocument: "after" },
   );
 
   if (claimed) {
+    // Not awaited: the realtor's access never waits on LambaCard's transfer.
+    if (claimed.incentive)
+      startIncentive(claimed._id).catch((error: unknown) =>
+        console.error(`Incentive for ${claimed.reference} did not start:`, error),
+      );
+
     sendCourseAccess(claimed.email, {
       name: claimed.fullname,
       reference: claimed.reference,

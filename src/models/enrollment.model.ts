@@ -15,6 +15,25 @@ import validator from "validator";
 export type EnrollmentStatus = "pending" | "paid" | "completed";
 export const ENROLLMENT_STATUSES: EnrollmentStatus[] = ["pending", "paid", "completed"];
 
+/** Naira sent to LambaCard per paid course, funding the realtor's token incentive. */
+export const INCENTIVE_PAYOUT = 10_000;
+/** Every incentive transfer is filed under this prefix, which is how the webhook tells them apart. */
+export const INCENTIVE_REFERENCE_PREFIX = "INS-LBT-";
+
+export type IncentiveStatus = "due" | "sending" | "sent";
+export const INCENTIVE_STATUSES: IncentiveStatus[] = ["due", "sending", "sent"];
+
+/** The payout to LambaCard. Absent on enrollments paid before it existed or priced too low. */
+export interface IIncentive {
+  amount: number;
+  status: IncentiveStatus;
+  /** The reference of the attempt in flight; empty between attempts. */
+  transferRef: string;
+  transferId?: number;
+  attempts: number;
+  sentAt?: Date;
+}
+
 export interface IEnrollment {
   fullname: string;
   email: string;
@@ -44,6 +63,8 @@ export interface IEnrollment {
   /** The account this enrollment belongs to. */
   registeredUser?: Types.ObjectId;
 
+  incentive?: IIncentive;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +72,22 @@ export interface IEnrollment {
 export type EnrollmentDoc = HydratedDocument<IEnrollment>;
 
 const text = () => ({ type: String, trim: true, default: "" });
+
+const incentiveSchema = new Schema<IIncentive>(
+  {
+    amount: { type: Number, required: true, min: [1, "An amount must be greater than 0"] },
+    status: {
+      type: String,
+      enum: { values: INCENTIVE_STATUSES, message: "{VALUE} is not a valid payout status" },
+      default: "due",
+    },
+    transferRef: text(),
+    transferId: { type: Number },
+    attempts: { type: Number, default: 0 },
+    sentAt: { type: Date },
+  },
+  { _id: false },
+);
 
 const enrollmentSchema = new Schema<IEnrollment>(
   {
@@ -89,6 +126,8 @@ const enrollmentSchema = new Schema<IEnrollment>(
     completedAt: { type: Date },
     registeredAt: { type: Date },
     registeredUser: { type: Schema.Types.ObjectId, ref: "User" },
+
+    incentive: { type: incentiveSchema },
   },
   { timestamps: true },
 );
@@ -101,6 +140,8 @@ enrollmentSchema.index({ createdAt: -1, _id: -1 });
 enrollmentSchema.index({ email: 1, status: 1 });
 // A signed-in realtor's own enrollment.
 enrollmentSchema.index({ registeredUser: 1, createdAt: -1 });
+// The sweep's payouts still to send or still in flight.
+enrollmentSchema.index({ "incentive.status": 1 }, { sparse: true });
 
 /** Stamped once, from the id, like a payment's. Mongoose 9 passes no `next`. */
 enrollmentSchema.pre("validate", function (this: EnrollmentDoc) {
@@ -125,6 +166,15 @@ export const adminEnrollment = (e: EnrollmentRow) => ({
   completedAt: e.completedAt,
   registered: !!e.registeredAt,
   createdAt: e.createdAt,
+  // The LambaCard payout. `needsCheck`: sending with no transfer id, so whether it went out
+  // is unknown and only Flutterwave's dashboard can say, under `transferRef`.
+  incentive: e.incentive && {
+    status: e.incentive.status,
+    amount: e.incentive.amount,
+    sentAt: e.incentive.sentAt,
+    transferRef: e.incentive.transferRef,
+    needsCheck: e.incentive.status === "sending" && e.incentive.transferId === undefined,
+  },
 });
 
 /** What the learner's own page needs about themselves. */

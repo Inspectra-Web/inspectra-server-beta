@@ -22,7 +22,7 @@ import {
   type SubscriptionDoc,
   type Tier,
 } from "../models/subscription.model.js";
-import { COURSE_REFERENCE_PREFIX } from "../models/enrollment.model.js";
+import { COURSE_REFERENCE_PREFIX, INCENTIVE_REFERENCE_PREFIX } from "../models/enrollment.model.js";
 import User, { type UserDoc } from "../models/user.model.js";
 import { creditEnrollment, enrollmentFor } from "../services/course.service.js";
 import { sendPaymentReceipt } from "../services/email.service.js";
@@ -33,6 +33,7 @@ import {
   verifyTransaction,
   type FlwTransaction,
 } from "../services/flutterwave.service.js";
+import { settleIncentive } from "../services/incentive.service.js";
 import {
   entitlements,
   listingAllowance,
@@ -504,10 +505,14 @@ export const flutterwaveWebhook = async (req: Request, res: Response): Promise<v
     data?: { id?: number; tx_ref?: string };
   };
 
-  // A release transfer finishing. Read back from Flutterwave, never taken off the body.
+  // A transfer finishing: a course incentive or an escrow release, told apart by the
+  // reference. Read back from Flutterwave, never taken off the body.
   if (event === "transfer.completed" && data?.id) {
     try {
-      await settleTransfer(await getTransfer(data.id));
+      const transfer = await getTransfer(data.id);
+
+      if (transfer.reference.startsWith(INCENTIVE_REFERENCE_PREFIX)) await settleIncentive(transfer);
+      else await settleTransfer(transfer);
     } catch (error) {
       console.error(`Webhook transfer settle failed for ${data.id}:`, error);
     }
