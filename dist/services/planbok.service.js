@@ -3,6 +3,8 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 const UNREACHABLE = "We could not reach the payments service. Try again.";
 const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_API_KEY) => {
+    // Logs carry the error message only: Planbok's replies and query strings hold customer data.
+    const route = `Planbok ${method} ${path.split("?")[0]}`;
     const response = await fetch(`${envConfig.PLANBOK_BASE_URL}/v2${path}`, {
         method,
         headers: {
@@ -11,17 +13,14 @@ const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_AP
         },
         body: body && JSON.stringify(body),
     }).catch((error) => {
-        console.error(`Planbok ${method} ${path} unreachable:`, error.cause ?? error);
+        console.error(`${route} unreachable: ${(error.cause ?? error).message}`);
         throw new AppError(UNREACHABLE, 502);
     });
     const result = await response.json().catch(() => ({}));
-    const logged = `Planbok ${method} ${path} (${response.status}): ${JSON.stringify(result)}`;
-    // Every reply is logged whole, success or not.
     if (!result.success) {
-        console.error(logged);
+        console.error(`${route} failed (${response.status}): ${result.message ?? "no message"}`);
         throw new AppError(UNREACHABLE, 502);
     }
-    console.log(logged);
     return result.data;
 };
 let publicKey = "";
@@ -48,7 +47,7 @@ export const createAccount = async (idempotencyKey, refId, name, holder) => {
         metadata: [{ name, refId, currencies: ["NGN"], holderDetails: holder }],
     });
     if (data.failed.length)
-        console.error(`Planbok did not open ${refId}:`, JSON.stringify(data.failed));
+        console.error(`Planbok did not open virtual account ${refId}.`);
     return data.created[0];
 };
 // This one owner's virtual account details are read with a separate Planbok API key.
@@ -59,8 +58,8 @@ export const findAccount = async (refId, email) => {
     return data.items[0];
 };
 export const getBalance = async (accountId, email) => {
-    const data = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
-    return { booked: toKobo(data.bookedBalance), available: toKobo(data.availableBalance) };
+    const { balance } = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
+    return { booked: toKobo(balance.bookedBalance), available: toKobo(balance.availableBalance) };
 };
 export const listBanks = async () => (await planbok("/virtual-accounts/banks?order=ASC")).banks;
 export const nameEnquiry = (accountNumber, sortCode) => planbok(`/virtual-accounts/name/enquiry?accountNumber=${accountNumber}&sortCode=${sortCode}`);
@@ -88,8 +87,8 @@ export const createWallet = async (idempotencyKey, refId, name) => {
     const created = wallets.find((wallet) => wallet.refId === refId);
     if (!created)
         console.error(wallets.length
-            ? `Planbok answered the wallet create for ${refId} with someone else's wallet:`
-            : `Planbok created no wallet for ${refId}:`, JSON.stringify(data));
+            ? `Planbok answered the wallet create for ${refId} with another customer's wallet.`
+            : `Planbok created no wallet for ${refId}.`);
     return created;
 };
 // `amount` is a decimal string in token units and stays one: 18 decimals overflow a number.

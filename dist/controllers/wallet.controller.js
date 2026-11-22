@@ -32,7 +32,7 @@ export const openMyWallet = async (req, res) => {
     catch (error) {
         // A Planbok refusal is logged where it happens; anything else would vanish here.
         if (!(error instanceof AppError))
-            console.error(`Wallet ${wallet.refId} failed:`, error);
+            console.error(`Wallet ${wallet.refId} failed: ${error instanceof Error ? error.message : "unknown error"}`);
         throw new AppError(NOT_CREATED, 502);
     }
     if (!opened) {
