@@ -27,6 +27,9 @@ export interface Holder {
 const UNREACHABLE = "We could not reach the payments service. Try again.";
 
 const planbok = async (path: string, method = "GET", body?: object, apiKey = envConfig.PLANBOK_API_KEY) => {
+  // Logs carry the error message only: Planbok's replies and query strings hold customer data.
+  const route = `Planbok ${method} ${path.split("?")[0]}`;
+
   const response = await fetch(`${envConfig.PLANBOK_BASE_URL}/v2${path}`, {
     method,
     headers: {
@@ -35,20 +38,17 @@ const planbok = async (path: string, method = "GET", body?: object, apiKey = env
     },
     body: body && JSON.stringify(body),
   }).catch((error) => {
-    console.error(`Planbok ${method} ${path} unreachable:`, error.cause ?? error);
+    console.error(`${route} unreachable: ${(error.cause ?? error).message}`);
     throw new AppError(UNREACHABLE, 502);
   });
 
   const result: any = await response.json().catch(() => ({}));
-  const logged = `Planbok ${method} ${path} (${response.status}): ${JSON.stringify(result)}`;
 
-  // Every reply is logged whole, success or not.
   if (!result.success) {
-    console.error(logged);
+    console.error(`${route} failed (${response.status}): ${result.message ?? "no message"}`);
     throw new AppError(UNREACHABLE, 502);
   }
 
-  console.log(logged);
   return result.data;
 };
 
@@ -96,7 +96,7 @@ export const createAccount = async (
     metadata: [{ name, refId, currencies: ["NGN"], holderDetails: holder }],
   });
 
-  if (data.failed.length) console.error(`Planbok did not open ${refId}:`, JSON.stringify(data.failed));
+  if (data.failed.length) console.error(`Planbok did not open virtual account ${refId}.`);
 
   return data.created[0];
 };
@@ -114,9 +114,9 @@ export const findAccount = async (refId: string, email: string): Promise<Planbok
 };
 
 export const getBalance = async (accountId: string, email: string) => {
-  const data = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
+  const { balance } = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
 
-  return { booked: toKobo(data.bookedBalance), available: toKobo(data.availableBalance) };
+  return { booked: toKobo(balance.bookedBalance), available: toKobo(balance.availableBalance) };
 };
 
 export const listBanks = async (): Promise<{ code: string; name: string }[]> =>
@@ -165,9 +165,8 @@ export const createWallet = async (
   if (!created)
     console.error(
       wallets.length
-        ? `Planbok answered the wallet create for ${refId} with someone else's wallet:`
-        : `Planbok created no wallet for ${refId}:`,
-      JSON.stringify(data),
+        ? `Planbok answered the wallet create for ${refId} with another customer's wallet.`
+        : `Planbok created no wallet for ${refId}.`,
     );
 
   return created;
