@@ -162,7 +162,7 @@ export interface PlanbokTransfer {
   amount: string;
   currency: string;
   destinationType: string;
-  /** The transaction's reference at Planbok, the one its transaction lookups take. */
+  /** Not the transaction's reference: Planbok's own lookup refuses it (2026-11-23). Unused. */
   providerReference: string;
 }
 
@@ -193,8 +193,23 @@ export const transfer = async (
     narration,
   });
 
-export const getTransaction = (accountId: string, reference: string): Promise<PlanbokTransaction> =>
-  planbok(`/virtual-accounts/${accountId}/transactions/reference/${encodeURIComponent(reference)}`);
+/**
+ * Our own transfer, found by the idempotency key we sent: Planbok echoes it back as
+ * `CustomerReference`. The transfer reply's `providerReference` cannot be looked up, so the
+ * key, which we hold before the call, is the one reliable handle. Undefined while Planbok
+ * has not listed it (or never got it). The latest 50 are plenty: we look the moment after
+ * sending, and on every sweep after.
+ */
+export const findTransfer = async (accountId: string, key: string): Promise<PlanbokTransaction | undefined> => {
+  const { items } = await planbok(`/virtual-accounts/${accountId}/transactions?limit=50`);
+  const found = (items as (PlanbokTransaction & { CustomerReference?: string })[]).find(
+    (item) => item.CustomerReference === key,
+  );
+  if (!found) return undefined;
+
+  const { id, amount, currency, entry, reference, status } = found;
+  return { id, amount, currency, entry, reference, status };
+};
 
 export const createWallet = async (
   idempotencyKey: string,
