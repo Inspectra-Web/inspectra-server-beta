@@ -1,7 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { adminLogin, decideDisputeHandler, getDispute, getAdminSession, getUser, getListing, listListings, getPayment, getRealtorVirtualAccount, getRealtorWallet, getRealtorWalletBalances, getRequest, getRequestDemand, listDisputes, listPayments, listRealtors, listRequests, listUsers, listVirtualAccounts, listWallets, reviewListing, setRealtorSubscription, updateUserStatus, } from "../controllers/admin.controller.js";
-import { addLesson, cancelLessonUpload, completeLessonUpload, deleteLesson, getAdminCourse, listEnrollments, reorderLessons, saveCourse, setCourseStatus, signLessonParts, startLessonUpload, updateLesson, } from "../controllers/course.controller.js";
+import { addLesson, cancelLessonUpload, completeLessonUpload, deleteLesson, getAdminCourse, getEnrollmentReward, listEnrollments, sendEnrollmentReward, reorderLessons, saveCourse, setCourseStatus, signLessonParts, startLessonUpload, updateLesson, } from "../controllers/course.controller.js";
 import AppError from "../error/app.error.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
 import validate from "../middlewares/validate.middleware.js";
@@ -68,5 +68,8 @@ router.post(`${lessonUpload}/complete`, protect, restrictTo("admin"), validate(c
 router.post(`${lessonUpload}/cancel`, protect, restrictTo("admin"), validate(cancelLessonUploadSchema), cancelLessonUpload);
 router.patch("/course/status", protect, restrictTo("admin"), validate(courseStatusSchema), setCourseStatus);
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
+// A reward for a course paid before rewards existed, from money already in our Planbok account.
+router.get("/course/enrollments/:id/reward", protect, restrictTo("admin"), getEnrollmentReward);
+router.post("/course/enrollments/:id/reward", protect, restrictTo("admin"), sendEnrollmentReward);
 export default router;
 //# sourceMappingURL=admin.route.js.map

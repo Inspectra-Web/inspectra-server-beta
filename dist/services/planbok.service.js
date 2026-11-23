@@ -63,7 +63,8 @@ export const findAccount = async (refId, email) => {
     const data = await planbok(`/virtual-accounts?refId=${encodeURIComponent(refId)}`, "GET", undefined, accountKey(email));
     return data.items[0];
 };
-export const getBalance = async (accountId, email) => {
+/** No email reads with the main key, which is the one our own incentive account is under. */
+export const getBalance = async (accountId, email = "") => {
     const { balance } = await planbok(`/virtual-accounts/${accountId}/balance`, "GET", undefined, accountKey(email));
     return { booked: toKobo(balance.bookedBalance), available: toKobo(balance.availableBalance) };
 };

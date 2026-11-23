@@ -1,10 +1,11 @@
 import { trusted } from "mongoose";
 import envConfig from "../config/env.config.js";
+import AppError from "../error/app.error.js";
 import Enrollment, { INCENTIVE_PAYOUT, INCENTIVE_REFERENCE_PREFIX, } from "../models/enrollment.model.js";
 import Wallet from "../models/wallet.model.js";
 import { createTransfer, getTransfer, TransferRejected, } from "./flutterwave.service.js";
 import { createPurchase, getPurchase } from "./lambacard.service.js";
-import { getTransaction, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
+import { getBalance, getTransaction, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
 /**
  * The course incentive: ₦10,000 of every paid course buys the realtor's LambaCard tokens.
  * Its first hop is one Flutterwave transfer into our Planbok account, sent the moment the
@@ -218,6 +219,60 @@ export const startPurchase = async (id) => {
         console.error(`Incentive purchase for ${transactionReference} not made yet: ${error.message}`);
     }
     return true;
+};
+/**
+ * What an admin needs before starting a reward from the Planbok balance: a course paid
+ * before the reward existed (or whose payout never left), with nothing under way, for a
+ * realtor whose wallet is ready. Refuses with the reason otherwise.
+ */
+export const rewardFromBalancePreview = async (id) => {
+    const enrollment = await Enrollment.findById(id);
+    if (!enrollment)
+        throw new AppError("That enrollment does not exist.", 404);
+    if (enrollment.status === "pending")
+        throw new AppError("This course has not been paid for.", 409);
+    if (enrollment.incentive && enrollment.incentive.status !== "due")
+        throw new AppError("This realtor's reward is already under way or settled.", 409);
+    if (!enrollment.registeredUser)
+        throw new AppError("This enrollment has no account linked yet.", 409);
+    const wallet = await Wallet.findOne({ user: enrollment.registeredUser, status: "active" }).select("address");
+    if (!wallet?.address)
+        throw new AppError("This realtor has no active wallet yet, so there is nowhere to send the tokens.", 409);
+    const { PLANBOK_ACCOUNT_ID: accountId, PLANBOK_ACCOUNT_NAME: accountName } = envConfig;
+    if (!accountId)
+        throw new AppError("No Planbok account is set for rewards.", 503);
+    const { available } = await getBalance(accountId);
+    return { enrollment, walletAddress: wallet.address, balance: available, accountName, amount: INCENTIVE_PAYOUT };
+};
+/**
+ * Starts a reward from money already in our Planbok account: no Flutterwave hop, straight
+ * to forwarding, after which it runs exactly like any other reward. The claim is
+ * conditional, so it cannot race the sweep or a second click into paying twice.
+ */
+export const sendRewardFromBalance = async (id) => {
+    const { balance, amount } = await rewardFromBalancePreview(id);
+    if (balance < toKobo(amount))
+        throw new AppError(`The Planbok account holds ₦${(balance / 100).toLocaleString("en-NG")}, short of ₦${amount.toLocaleString("en-NG")}.`, 409);
+    const claimed = await Enrollment.findOneAndUpdate({
+        _id: id,
+        status: trusted({ $ne: "pending" }),
+        $or: [{ incentive: trusted({ $exists: false }) }, { "incentive.status": "due" }],
+    }, {
+        $set: {
+            incentive: {
+                amount,
+                status: "forwarding",
+                fromBalance: true,
+                funding: { reference: "", attempts: 0 },
+                forwarding: { reference: "", attempts: 0 },
+            },
+        },
+    });
+    if (!claimed)
+        throw new AppError("This realtor's reward was started a moment ago.", 409);
+    console.log(`Incentive for ${claimed.reference} started from the Planbok balance by an admin.`);
+    await startForwarding(id);
+    return Enrollment.findById(id).lean();
 };
 /**
  * Applies a purchase read back from LambaCard, never a webhook body. CONFIRMED ends it once

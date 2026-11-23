@@ -39,6 +39,7 @@ const incentiveSchema = new Schema({
         default: "due",
     },
     funding: { type: transferSchema, default: () => ({}) },
+    fromBalance: { type: Boolean },
     forwarding: { type: transferSchema },
     purchase: { type: purchaseSchema },
     sentAt: { type: Date },
@@ -134,6 +135,7 @@ export const adminEnrollment = (e) => ({
         /** Only on `sent` rows, paid straight to LambaCard before the purchase existed. */
         sentAt: e.incentive.sentAt,
         check: incentiveCheck(e.incentive),
+        fromBalance: !!e.incentive.fromBalance,
         // Each hop's references, which is what an admin searches Flutterwave, Planbok or
         // LambaCard by.
         funding: e.incentive.funding && {

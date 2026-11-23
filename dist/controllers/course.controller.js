@@ -1,4 +1,4 @@
-import { trusted } from "mongoose";
+import { trusted, Types } from "mongoose";
 import AppError from "../error/app.error.js";
 import Course, { MAX_LESSONS, adminCourse, liveLessons, playable, lessonOutline, missingForPublish, publicCourse, } from "../models/course.model.js";
 import Enrollment, { adminEnrollment, learnerEnrollment, } from "../models/enrollment.model.js";
@@ -7,9 +7,10 @@ import { createAccount } from "./auth.controller.js";
 import { MAX_VIDEO_BYTES, PART_SIZE, abortUpload, completeUpload, deleteVideoFile, partUrls, playbackUrl, r2Configured, startUpload, videoKeyFor, } from "../services/r2.service.js";
 import { accessFor, courseLink, creditEnrollment, enrollmentByAccess, enrollmentByInvite, enrollmentFor, openDashboard, theCourse, completeEnrollment, } from "../services/course.service.js";
 import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
+import { rewardFromBalancePreview, sendRewardFromBalance } from "../services/incentive.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
 import { courseAssetId, destroyAsset, uploadCourseCover, } from "../services/upload.service.js";
-import { accessSchema, enrollmentReferenceSchema, inviteSchema, lessonParamSchema, listEnrollmentsSchema, saveCourseSchema, } from "../validators/course.validator.js";
+import { accessSchema, enrollmentParamSchema, enrollmentReferenceSchema, inviteSchema, lessonParamSchema, listEnrollmentsSchema, saveCourseSchema, } from "../validators/course.validator.js";
 /* Public ------------------------------------------------------------------------ */
 /** The sales page: the published course without its video, or null while in draft. */
 export const getCourse = async (_req, res) => {
@@ -509,6 +510,24 @@ export const listEnrollments = async (req, res) => {
             counts,
             registered: result?.registered[0]?.count ?? 0,
         },
+    });
+};
+/** What starting this enrollment's reward from the Planbok balance would do, or why it cannot. */
+export const getEnrollmentReward = async (req, res) => {
+    const { id } = enrollmentParamSchema.parse(req.params);
+    const { walletAddress, balance, accountName, amount } = await rewardFromBalancePreview(new Types.ObjectId(id));
+    res.status(200).json({
+        status: "success",
+        data: { amount, balance: balance / 100, accountName, walletAddress },
+    });
+};
+/** Moves ₦10,000 of the Planbok balance to LambaCard and buys this realtor's tokens. */
+export const sendEnrollmentReward = async (req, res) => {
+    const { id } = enrollmentParamSchema.parse(req.params);
+    const enrollment = await sendRewardFromBalance(new Types.ObjectId(id));
+    res.status(200).json({
+        status: "success",
+        data: { enrollment: enrollment && adminEnrollment(enrollment) },
     });
 };
 //# sourceMappingURL=course.controller.js.map
