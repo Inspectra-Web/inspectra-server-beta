@@ -24,7 +24,7 @@ import {
 /** Only a price that clears the payout owes one; a checkout opened at ₦10,000 never does. */
 export const incentiveFor = (amount: number): IIncentive | undefined =>
   amount > INCENTIVE_PAYOUT
-    ? { amount: INCENTIVE_PAYOUT, status: "due", transferRef: "", attempts: 0 }
+    ? { amount: INCENTIVE_PAYOUT, status: "due", funding: { reference: "", attempts: 0 } }
     : undefined;
 
 export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
@@ -38,15 +38,15 @@ export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
   const current = await Enrollment.findOne({ _id: id, "incentive.status": "due" }).select("incentive");
   if (!current?.incentive) return false;
 
-  const { attempts } = current.incentive;
+  const { attempts } = current.incentive.funding;
   const reference = `${INCENTIVE_REFERENCE_PREFIX}${String(id).slice(-8).toUpperCase()}-${attempts + 1}`;
 
   // Conditional on the attempt count too, so two callers can never send under one reference.
   const claimed = await Enrollment.findOneAndUpdate(
-    { _id: id, "incentive.status": "due", "incentive.attempts": attempts },
+    { _id: id, "incentive.status": "due", "incentive.funding.attempts": attempts },
     {
-      $set: { "incentive.status": "sending", "incentive.transferRef": reference },
-      $inc: { "incentive.attempts": 1 },
+      $set: { "incentive.status": "funding", "incentive.funding.reference": reference },
+      $inc: { "incentive.funding.attempts": 1 },
     },
     { returnDocument: "after" },
   );
@@ -63,20 +63,20 @@ export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
     });
 
     await Enrollment.updateOne(
-      { _id: id, "incentive.transferRef": reference },
-      { $set: { "incentive.transferId": transfer.id } },
+      { _id: id, "incentive.funding.reference": reference },
+      { $set: { "incentive.funding.transferId": transfer.id } },
     );
   } catch (error) {
     if (error instanceof TransferRejected) {
       // Refused outright, so nothing was sent: back to due for the next attempt. A low
       // balance lands here too, which is why there is no attempt limit.
       await Enrollment.updateOne(
-        { _id: id, "incentive.status": "sending", "incentive.transferRef": reference },
-        { $set: { "incentive.status": "due", "incentive.transferRef": "" } },
+        { _id: id, "incentive.status": "funding", "incentive.funding.reference": reference },
+        { $set: { "incentive.status": "due", "incentive.funding.reference": "" } },
       );
       console.error(`Incentive ${reference} refused: ${error.message}`);
     } else {
-      // Unknown whether it went out. Left sending with no transfer id: a blind retry could
+      // Unknown whether it went out. Left funding with no transfer id: a blind retry could
       // pay twice. Needs an admin to check Flutterwave.
       console.error(`Incentive ${reference} outcome unknown, check Flutterwave:`, error);
     }
@@ -90,15 +90,15 @@ export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
  * from Flutterwave, never a webhook body.
  */
 export const settleIncentive = async (transfer: FlwTransfer): Promise<void> => {
-  const sending: QueryFilter<IEnrollment> = {
-    "incentive.status": "sending",
-    "incentive.transferRef": transfer.reference,
+  const funding: QueryFilter<IEnrollment> = {
+    "incentive.status": "funding",
+    "incentive.funding.reference": transfer.reference,
   };
 
   if (transfer.status === "FAILED") {
-    const failed = await Enrollment.findOneAndUpdate(sending, {
-      $set: { "incentive.status": "due", "incentive.transferRef": "" },
-      $unset: { "incentive.transferId": 1 },
+    const failed = await Enrollment.findOneAndUpdate(funding, {
+      $set: { "incentive.status": "due", "incentive.funding.reference": "" },
+      $unset: { "incentive.funding.transferId": 1 },
     });
 
     if (failed)
@@ -108,8 +108,13 @@ export const settleIncentive = async (transfer: FlwTransfer): Promise<void> => {
 
   if (transfer.status !== "SUCCESSFUL") return;
 
-  await Enrollment.updateOne(sending, {
-    $set: { "incentive.status": "sent", "incentive.transferId": transfer.id, "incentive.sentAt": new Date() },
+  // Landed in our Planbok account; the forwarding hop picks it up from here.
+  await Enrollment.updateOne(funding, {
+    $set: {
+      "incentive.status": "forwarding",
+      "incentive.funding.transferId": transfer.id,
+      "incentive.funding.sentAt": new Date(),
+    },
   });
 };
 
@@ -121,15 +126,17 @@ export const settleIncentive = async (transfer: FlwTransfer): Promise<void> => {
  */
 const sweep = async (): Promise<void> => {
   const inFlight = await Enrollment.find({
-    "incentive.status": "sending",
-    "incentive.transferId": trusted({ $exists: true }),
-  }).select("incentive.transferId");
+    "incentive.status": "funding",
+    "incentive.funding.transferId": trusted({ $exists: true }),
+  }).select("incentive.funding.transferId");
 
   for (const { incentive } of inFlight) {
+    const transferId = incentive!.funding.transferId!;
+
     try {
-      await settleIncentive(await getTransfer(incentive!.transferId!));
+      await settleIncentive(await getTransfer(transferId));
     } catch (error) {
-      console.error(`Could not read incentive transfer ${incentive?.transferId}:`, error);
+      console.error(`Could not read incentive transfer ${transferId}:`, error);
     }
   }
 
