@@ -702,11 +702,13 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
 /** What starting this enrollment's reward from the Planbok balance would do, or why it cannot. */
 export const getEnrollmentReward = async (req: Request, res: Response): Promise<void> => {
   const { id } = enrollmentParamSchema.parse(req.params);
-  const { walletAddress, balance, accountName, amount } = await rewardFromBalancePreview(new Types.ObjectId(id));
+  const { walletAddress, balance, accountName, amount, oldPayoutSentAt } = await rewardFromBalancePreview(
+    new Types.ObjectId(id),
+  );
 
   res.status(200).json({
     status: "success",
-    data: { amount, balance: balance / 100, accountName, walletAddress },
+    data: { amount, balance: balance / 100, accountName, walletAddress, oldPayoutSentAt },
   });
 };
 

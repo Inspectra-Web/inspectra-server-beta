@@ -66,6 +66,8 @@ export interface IIncentive {
   funding: IIncentiveTransfer;
   /** Started by an admin from money already in our Planbok account, so there is no funding hop. */
   fromBalance?: boolean;
+  /** When an old payout LambaCard returned was paid; this reward replaces it. */
+  oldPayoutSentAt?: Date;
   forwarding?: IIncentiveTransfer;
   purchase?: IIncentivePurchase;
   /** Only on `sent` rows. */
@@ -145,6 +147,7 @@ const incentiveSchema = new Schema<IIncentive>(
     },
     funding: { type: transferSchema, default: () => ({}) },
     fromBalance: { type: Boolean },
+    oldPayoutSentAt: { type: Date },
     forwarding: { type: transferSchema },
     purchase: { type: purchaseSchema },
     sentAt: { type: Date },
@@ -262,6 +265,7 @@ export const adminEnrollment = (e: EnrollmentRow) => ({
     sentAt: e.incentive.sentAt,
     check: incentiveCheck(e.incentive),
     fromBalance: !!e.incentive.fromBalance,
+    oldPayoutSentAt: e.incentive.oldPayoutSentAt,
     // Each hop's references, which is what an admin searches Flutterwave, Planbok or
     // LambaCard by.
     funding: e.incentive.funding && {
