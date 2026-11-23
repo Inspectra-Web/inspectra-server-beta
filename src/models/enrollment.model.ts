@@ -215,6 +215,30 @@ export const COURSE_REFERENCE_PREFIX = "INS-CRS-";
 
 type EnrollmentRow = IEnrollment & { _id: Types.ObjectId };
 
+const TOKEN_SCALE = 10n ** 18n;
+
+/** LBT base units (18 decimals) as a decimal string, "25000000000000000000" -> "25.000000000000000000". */
+export const toTokenAmount = (units: string) => {
+  const value = BigInt(units);
+  return `${value / TOKEN_SCALE}.${(value % TOKEN_SCALE).toString().padStart(18, "0")}`;
+};
+
+/**
+ * Which provider holds the answer when a hop went out and nothing came back: a Flutterwave
+ * transfer with no id, or a Planbok transfer with no reference. Never resent on its own.
+ */
+const incentiveCheck = (incentive: IIncentive) => {
+  const { status, funding, forwarding } = incentive;
+
+  if (status === "funding" && funding?.reference && funding.transferId === undefined)
+    return { provider: "flutterwave" as const, reference: funding.reference };
+
+  if (status === "forwarding" && forwarding?.reference && !forwarding.providerReference)
+    return { provider: "planbok" as const, reference: forwarding.reference };
+
+  return null;
+};
+
 /** The admin table. Secrets and Flutterwave internals stay out. */
 export const adminEnrollment = (e: EnrollmentRow) => ({
   id: e._id,
@@ -228,14 +252,33 @@ export const adminEnrollment = (e: EnrollmentRow) => ({
   completedAt: e.completedAt,
   registered: !!e.registeredAt,
   createdAt: e.createdAt,
-  // The token incentive. `needsCheck`: funding with no transfer id, so whether it went out
-  // is unknown and only Flutterwave's dashboard can say, under `transferRef`.
   incentive: e.incentive && {
     status: e.incentive.status,
     amount: e.incentive.amount,
+    /** Only on `sent` rows, paid straight to LambaCard before the purchase existed. */
     sentAt: e.incentive.sentAt,
-    transferRef: e.incentive.funding?.reference ?? "",
-    needsCheck: e.incentive.status === "funding" && e.incentive.funding?.transferId === undefined,
+    check: incentiveCheck(e.incentive),
+    // Each hop's references, which is what an admin searches Flutterwave, Planbok or
+    // LambaCard by.
+    funding: e.incentive.funding && {
+      reference: e.incentive.funding.reference,
+      transferId: e.incentive.funding.transferId,
+      sentAt: e.incentive.funding.sentAt,
+    },
+    forwarding: e.incentive.forwarding && {
+      reference: e.incentive.forwarding.reference,
+      providerReference: e.incentive.forwarding.providerReference,
+      sentAt: e.incentive.forwarding.sentAt,
+    },
+    purchase: e.incentive.purchase && {
+      id: e.incentive.purchase.id,
+      status: e.incentive.purchase.status,
+      tokens: toTokenAmount(e.incentive.purchase.customerTokenUnits),
+      walletAddress: e.incentive.purchase.walletAddress,
+      transactionHash: e.incentive.purchase.transactionHash,
+      explorerUrl: e.incentive.purchase.explorerUrl,
+      confirmedAt: e.incentive.purchase.confirmedAt,
+    },
   },
 });
 

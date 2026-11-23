@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
+import { trusted, type Types } from "mongoose";
 
 import AppError from "../error/app.error.js";
+import Enrollment, { toTokenAmount, type IEnrollment } from "../models/enrollment.model.js";
 import Identity from "../models/identity.model.js";
 import Wallet, { publicWallet } from "../models/wallet.model.js";
 import { createWallet, getWalletBalances, type PlanbokWallet } from "../services/planbok.service.js";
@@ -21,6 +23,39 @@ export const getMyWalletBalances = async (req: Request, res: Response): Promise<
     wallet?.status === "active" && wallet.planbokId ? await getWalletBalances(wallet.planbokId) : null;
 
   res.status(200).json({ status: "success", data: { balances } });
+};
+
+/**
+ * The LBT a realtor earns, today one reward per paid course. The realtor sees three states
+ * only: delivered, on its way, or delayed (LambaCard rejected the purchase, or it was paid
+ * the old way with no purchase): an admin settles those. The amount shows once LambaCard
+ * has quoted it, never before.
+ */
+const realtorReward = (enrollment: IEnrollment & { _id: Types.ObjectId }) => {
+  const { status, purchase } = enrollment.incentive!;
+  const delayed = status === "rejected" || status === "sent";
+
+  return {
+    id: enrollment._id,
+    source: "course" as const,
+    earnedAt: enrollment.paidAt,
+    status: status === "confirmed" ? "delivered" : delayed ? "delayed" : "on_its_way",
+    tokens: purchase ? toTokenAmount(purchase.customerTokenUnits) : null,
+    symbol: "LBT",
+    explorerUrl: status === "confirmed" ? (purchase?.explorerUrl ?? null) : null,
+    deliveredAt: status === "confirmed" ? (purchase?.confirmedAt ?? null) : null,
+  };
+};
+
+export const getMyRewards = async (req: Request, res: Response): Promise<void> => {
+  const enrollments = await Enrollment.find({
+    registeredUser: req.user!._id,
+    "incentive.status": trusted({ $exists: true }),
+  })
+    .sort({ paidAt: -1 })
+    .lean();
+
+  res.status(200).json({ status: "success", data: { rewards: enrollments.map(realtorReward) } });
 };
 
 export const openMyWallet = async (req: Request, res: Response): Promise<void> => {
