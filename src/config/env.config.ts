@@ -24,7 +24,12 @@ const envConfig = {
   FLW_BASE_URL: process.env.FLW_BASE_URL!,
   FLW_SECRET_KEY: process.env.FLW_SECRET_KEY!,
   FLW_WEBHOOK_HASH: process.env.FLW_WEBHOOK_HASH!,
-  // Where each paid course's incentive payout goes: LambaCard's NGN account.
+  // The course incentive's first hop: Flutterwave pays ₦10,000 into this Planbok virtual
+  // account, which then forwards it to LambaCard's account below.
+  PLANBOK_BANK_CODE: process.env.PLANBOK_BANK_CODE!,
+  PLANBOK_ACCOUNT_NUMBER: process.env.PLANBOK_ACCOUNT_NUMBER!,
+  PLANBOK_ACCOUNT_NAME: process.env.PLANBOK_ACCOUNT_NAME!,
+  PLANBOK_ACCOUNT_ID: process.env.PLANBOK_ACCOUNT_ID!,
   LAMBACARD_BANK_CODE: process.env.LAMBACARD_BANK_CODE!,
   LAMBACARD_ACCOUNT_NUMBER: process.env.LAMBACARD_ACCOUNT_NUMBER!,
   LAMBACARD_ACCOUNT_NAME: process.env.LAMBACARD_ACCOUNT_NAME!,

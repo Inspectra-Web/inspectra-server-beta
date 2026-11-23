@@ -15,10 +15,10 @@ import {
 } from "./flutterwave.service.js";
 
 /**
- * The course incentive: ₦10,000 of every paid course goes to LambaCard's account, which
- * funds the realtor's token reward. One Flutterwave transfer per enrollment, sent the moment
- * the payment is claimed, with the same discipline as an escrow release: a refusal is
- * retried, an unknown outcome is never resent blind.
+ * The course incentive: ₦10,000 of every paid course buys the realtor's LambaCard tokens.
+ * Its first hop is one Flutterwave transfer into our Planbok account, sent the moment the
+ * payment is claimed, with the same discipline as an escrow release: a refusal is retried,
+ * an unknown outcome is never resent blind.
  */
 
 /** Only a price that clears the payout owes one; a checkout opened at ₦10,000 never does. */
@@ -28,10 +28,10 @@ export const incentiveFor = (amount: number): IIncentive | undefined =>
     : undefined;
 
 export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
-  const { LAMBACARD_BANK_CODE: bankCode, LAMBACARD_ACCOUNT_NUMBER: accountNumber } = envConfig;
+  const { PLANBOK_BANK_CODE: bankCode, PLANBOK_ACCOUNT_NUMBER: accountNumber } = envConfig;
 
   if (!bankCode || !accountNumber) {
-    console.error(`Incentive for enrollment ${String(id)} waits: no LambaCard account is set.`);
+    console.error(`Incentive for enrollment ${String(id)} waits: no Planbok account is set.`);
     return false;
   }
 
@@ -42,8 +42,14 @@ export const startIncentive = async (id: Types.ObjectId): Promise<boolean> => {
   const reference = `${INCENTIVE_REFERENCE_PREFIX}${String(id).slice(-8).toUpperCase()}-${attempts + 1}`;
 
   // Conditional on the attempt count too, so two callers can never send under one reference.
+  // A row due before the stages existed has no funding record yet, so a first attempt
+  // matches a missing count as well as 0.
   const claimed = await Enrollment.findOneAndUpdate(
-    { _id: id, "incentive.status": "due", "incentive.funding.attempts": attempts },
+    {
+      _id: id,
+      "incentive.status": "due",
+      "incentive.funding.attempts": attempts || trusted({ $in: [0, null] }),
+    },
     {
       $set: { "incentive.status": "funding", "incentive.funding.reference": reference },
       $inc: { "incentive.funding.attempts": 1 },
