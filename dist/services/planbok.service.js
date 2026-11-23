@@ -92,7 +92,21 @@ export const transfer = async (accountId, idempotencyKey, amount, destinationTyp
     destination,
     narration,
 });
-export const getTransaction = (accountId, reference) => planbok(`/virtual-accounts/${accountId}/transactions/reference/${encodeURIComponent(reference)}`);
+/**
+ * Our own transfer, found by the idempotency key we sent: Planbok echoes it back as
+ * `CustomerReference`. The transfer reply's `providerReference` cannot be looked up, so the
+ * key, which we hold before the call, is the one reliable handle. Undefined while Planbok
+ * has not listed it (or never got it). The latest 50 are plenty: we look the moment after
+ * sending, and on every sweep after.
+ */
+export const findTransfer = async (accountId, key) => {
+    const { items } = await planbok(`/virtual-accounts/${accountId}/transactions?limit=50`);
+    const found = items.find((item) => item.CustomerReference === key);
+    if (!found)
+        return undefined;
+    const { id, amount, currency, entry, reference, status } = found;
+    return { id, amount, currency, entry, reference, status };
+};
 export const createWallet = async (idempotencyKey, refId, name) => {
     const data = await planbok("/organization/wallets", "POST", {
         idempotencyKey,

@@ -6,7 +6,7 @@ import Enrollment, { INCENTIVE_PAYOUT, INCENTIVE_REFERENCE_PREFIX, } from "../mo
 import Wallet from "../models/wallet.model.js";
 import { createTransfer, getTransfer, TransferRejected, } from "./flutterwave.service.js";
 import { createPurchase, getPurchase } from "./lambacard.service.js";
-import { getBalance, getTransaction, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
+import { findTransfer, getBalance, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
 /**
  * The course incentive: ₦10,000 of every paid course buys the realtor's LambaCard tokens.
  * Its first hop is one Flutterwave transfer into our Planbok account, sent the moment the
@@ -128,15 +128,10 @@ export const startForwarding = async (id, byAdmin = false) => {
     if (!claimed?.incentive)
         return false;
     try {
-        const sent = await transfer(accountId, reference, toKobo(claimed.incentive.amount), 
+        await transfer(accountId, reference, toKobo(claimed.incentive.amount), 
         // LambaCard's account is a Planbok virtual account too, so both sit at Loma (090620).
         sortCode === ourBankCode ? "same-bank" : "other-banks", { accountNumber, sortCode, accountName }, `INSPECTRA COURSE ${claimed.reference}`);
-        if (!sent.providerReference) {
-            console.error(`Incentive ${reference} sent, but Planbok gave no reference: check Planbok.`);
-            return true;
-        }
-        await Enrollment.updateOne({ _id: id, "incentive.forwarding.reference": reference }, { $set: { "incentive.forwarding.providerReference": sent.providerReference } });
-        await settleForwarding(id, sent.providerReference);
+        await settleForwarding(id, reference);
     }
     catch (error) {
         if (error instanceof PlanbokRefused) {
@@ -154,33 +149,44 @@ export const startForwarding = async (id, byAdmin = false) => {
     return true;
 };
 /**
- * Reads the forwarding transfer back from Planbok and, once it has settled for the right
- * amount, hands the incentive on to the purchase. Anything else leaves it where it is.
+ * Finds the forwarding transfer at Planbok by our key and, once it has settled for the
+ * right amount, records Planbok's reference for it (the one the LambaCard purchase is made
+ * with) and hands the incentive on to the purchase. Anything else leaves it where it is.
+ * Also settles a send whose reply never came back, once Planbok lists it.
  */
-const settleForwarding = async (id, providerReference) => {
-    const row = await Enrollment.findOne({
+const settleForwarding = async (id, key) => {
+    const open = {
         _id: id,
         "incentive.status": "forwarding",
-        "incentive.forwarding.providerReference": providerReference,
-    }).select("incentive");
+        "incentive.forwarding.reference": key,
+    };
+    const row = await Enrollment.findOne(open).select("incentive");
     if (!row?.incentive)
         return;
     let settled;
     try {
-        settled = await getTransaction(envConfig.PLANBOK_ACCOUNT_ID, providerReference);
+        settled = await findTransfer(envConfig.PLANBOK_ACCOUNT_ID, key);
     }
     catch {
-        return; // Not readable yet; the next sweep asks again.
+        return; // Not readable now; the next sweep asks again.
     }
+    if (!settled)
+        return; // Not listed yet.
     if (settled.status !== "SUCCESS") {
-        console.error(`Incentive forward ${providerReference} is ${settled.status}.`);
+        console.error(`Incentive forward ${key} is ${settled.status}.`);
         return;
     }
     if (settled.entry !== "DEBIT" || toKobo(settled.amount) !== toKobo(row.incentive.amount)) {
-        console.error(`Incentive forward ${providerReference} does not match the payout: check Planbok.`);
+        console.error(`Incentive forward ${key} does not match the payout: check Planbok.`);
         return;
     }
-    const forwarded = await Enrollment.updateOne({ _id: id, "incentive.status": "forwarding", "incentive.forwarding.providerReference": providerReference }, { $set: { "incentive.status": "purchasing", "incentive.forwarding.sentAt": new Date() } });
+    const forwarded = await Enrollment.updateOne(open, {
+        $set: {
+            "incentive.status": "purchasing",
+            "incentive.forwarding.providerReference": settled.reference,
+            "incentive.forwarding.sentAt": new Date(),
+        },
+    });
     if (forwarded.modifiedCount)
         await startPurchase(id);
 };
@@ -354,12 +360,13 @@ const sweep = async () => {
             console.error(`Could not read incentive transfer ${transferId}:`, error);
         }
     }
+    // Every forward that went out, including one whose reply never came back: found by key.
     const forwarded = await Enrollment.find({
         "incentive.status": "forwarding",
-        "incentive.forwarding.providerReference": trusted({ $exists: true }),
-    }).select("incentive.forwarding.providerReference");
+        "incentive.forwarding.reference": trusted({ $nin: ["", null] }),
+    }).select("incentive.forwarding.reference");
     for (const { _id, incentive } of forwarded)
-        await settleForwarding(_id, incentive.forwarding.providerReference);
+        await settleForwarding(_id, incentive.forwarding.reference);
     // Purchases still open. The only catch for one LambaCard stops reporting on, such as a
     // payment check that timed out and sits at CREATED.
     const buying = await Enrollment.find({
