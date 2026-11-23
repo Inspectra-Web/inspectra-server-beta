@@ -22,8 +22,19 @@ const envConfig = {
     FLW_BASE_URL: process.env.FLW_BASE_URL,
     FLW_SECRET_KEY: process.env.FLW_SECRET_KEY,
     FLW_WEBHOOK_HASH: process.env.FLW_WEBHOOK_HASH,
-    // Where each paid course's incentive payout goes: LambaCard's NGN account.
+    // The course incentive's first hop: Flutterwave pays ₦10,000 into this Planbok virtual
+    // account, which then forwards it to LambaCard's account below.
+    PLANBOK_BANK_CODE: process.env.PLANBOK_BANK_CODE,
+    PLANBOK_ACCOUNT_NUMBER: process.env.PLANBOK_ACCOUNT_NUMBER,
+    PLANBOK_ACCOUNT_NAME: process.env.PLANBOK_ACCOUNT_NAME,
+    PLANBOK_ACCOUNT_ID: process.env.PLANBOK_ACCOUNT_ID,
     LAMBACARD_BANK_CODE: process.env.LAMBACARD_BANK_CODE,
+    // LambaCard's purchase API. The key's prefix picks the environment (lbt_test_ is sandbox).
+    LAMBACARD_BASE_URL: process.env.LAMBACARD_BASE_URL || "https://purchase-api.lambatoken.com/api/v1",
+    LAMBACARD_API_KEY: process.env.LAMBACARD_API_KEY || "",
+    LAMBACARD_WEBHOOK_SECRET: process.env.LAMBACARD_WEBHOOK_SECRET || "",
+    // Sandbox only: settle test purchases on BSC Testnet rather than simulating them.
+    LAMBACARD_EXECUTE_ON_CHAIN: process.env.LAMBACARD_EXECUTE_ON_CHAIN === "true",
     LAMBACARD_ACCOUNT_NUMBER: process.env.LAMBACARD_ACCOUNT_NUMBER,
     LAMBACARD_ACCOUNT_NAME: process.env.LAMBACARD_ACCOUNT_NAME,
     PLANBOK_BASE_URL: process.env.PLANBOK_BASE_URL || "https://api.planbok.io",

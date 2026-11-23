@@ -2,6 +2,9 @@ import { constants, publicEncrypt } from "node:crypto";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 const UNREACHABLE = "We could not reach the payments service. Try again.";
+/** Planbok answered and turned the request down, so nothing was done. */
+export class PlanbokRefused extends AppError {
+}
 const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_API_KEY) => {
     // Logs carry the error message only: Planbok's replies and query strings hold customer data.
     const route = `Planbok ${method} ${path.split("?")[0]}`;
@@ -18,8 +21,11 @@ const planbok = async (path, method = "GET", body, apiKey = envConfig.PLANBOK_AP
     });
     const result = await response.json().catch(() => ({}));
     if (!result.success) {
-        console.error(`${route} failed (${response.status}): ${result.message ?? "no message"}`);
-        throw new AppError(UNREACHABLE, 502);
+        const message = result.errors?.message ?? result.message ?? "no message";
+        console.error(`${route} failed (${response.status}): ${message}`);
+        // Only a 4xx is a definite no; a 5xx or an unreadable reply may have done the work.
+        const refused = response.status >= 400 && response.status < 500;
+        throw refused ? new PlanbokRefused(UNREACHABLE, 502) : new AppError(UNREACHABLE, 502);
     }
     return result.data;
 };
@@ -62,7 +68,15 @@ export const getBalance = async (accountId, email) => {
     return { booked: toKobo(balance.bookedBalance), available: toKobo(balance.availableBalance) };
 };
 export const listBanks = async () => (await planbok("/virtual-accounts/banks?order=ASC")).banks;
-export const nameEnquiry = (accountNumber, sortCode) => planbok(`/virtual-accounts/name/enquiry?accountNumber=${accountNumber}&sortCode=${sortCode}`);
+/**
+ * An account at any bank, by number and sort code. Planbok nests it under `account`; an
+ * account the bank cannot resolve is a 400, so it throws `PlanbokRefused`.
+ */
+export const nameEnquiry = async (accountNumber, sortCode) => {
+    const query = new URLSearchParams({ accountNumber, sortCode });
+    const { account } = await planbok(`/virtual-accounts/name/enquiry?${query}`);
+    return { accountNumber: account.accountNumber, accountName: account.accountName, bankCode: account.bankCode };
+};
 export const transfer = async (accountId, idempotencyKey, amount, destinationType, destination, narration) => planbok(`/virtual-accounts/${accountId}/transfer`, "POST", {
     idempotencyKey,
     encryptedOrganizationSecret: await encryptedSecret("verify"),
@@ -71,6 +85,7 @@ export const transfer = async (accountId, idempotencyKey, amount, destinationTyp
     destination,
     narration,
 });
+export const getTransaction = (accountId, reference) => planbok(`/virtual-accounts/${accountId}/transactions/reference/${encodeURIComponent(reference)}`);
 export const createWallet = async (idempotencyKey, refId, name) => {
     const data = await planbok("/organization/wallets", "POST", {
         idempotencyKey,
