@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { trusted, type QueryFilter, type Types } from "mongoose";
 
 import envConfig from "../config/env.config.js";
@@ -136,7 +138,7 @@ export const settleIncentive = async (transfer: FlwTransfer): Promise<void> => {
  * reference for it is what the LambaCard purchase is made with. A refusal is retried; an
  * unknown outcome (sent, no reference back) waits for an admin to check Planbok.
  */
-export const startForwarding = async (id: Types.ObjectId): Promise<boolean> => {
+export const startForwarding = async (id: Types.ObjectId, byAdmin = false): Promise<boolean> => {
   const {
     PLANBOK_ACCOUNT_ID: accountId,
     PLANBOK_BANK_CODE: ourBankCode,
@@ -159,7 +161,9 @@ export const startForwarding = async (id: Types.ObjectId): Promise<boolean> => {
   const attempts = current?.incentive?.forwarding?.attempts;
   if (attempts === undefined) return false;
 
-  const reference = `${INCENTIVE_REFERENCE_PREFIX}${String(id).slice(-8).toUpperCase()}-F${attempts + 1}`;
+  // Planbok wants a UUID v4 here and refuses anything else with a 400. A fresh one per
+  // attempt, stored before the call like every other hop's reference.
+  const reference = randomUUID();
 
   const claimed = await Enrollment.findOneAndUpdate(
     { ...waiting, "incentive.forwarding.attempts": attempts },
@@ -197,11 +201,15 @@ export const startForwarding = async (id: Types.ObjectId): Promise<boolean> => {
   } catch (error) {
     if (error instanceof PlanbokRefused) {
       // Turned down, so nothing moved: back to waiting for the next attempt. A Planbok
-      // balance not yet credited lands here too.
+      // balance not yet credited lands here too. An admin's send is never retried by the
+      // sweep, so the admin hears why and can press again.
       await Enrollment.updateOne(
         { _id: id, "incentive.status": "forwarding", "incentive.forwarding.reference": reference },
         { $set: { "incentive.forwarding.reference": "" } },
       );
+
+      if (byAdmin)
+        throw new AppError(`Planbok turned the transfer down, so nothing moved: ${error.reason}`, 502);
     } else {
       console.error(`Incentive ${reference} outcome unknown, check Planbok:`, error);
     }
@@ -310,7 +318,13 @@ export const rewardFromBalancePreview = async (id: Types.ObjectId) => {
 
   // An old payout (`sent`) went straight to LambaCard with no purchase. It qualifies only
   // once LambaCard has returned the money; the admin confirms that, the prompt says so.
-  if (enrollment.incentive && !["due", "sent"].includes(enrollment.incentive.status))
+  // An admin's earlier send that Planbok turned down left nothing sent: it can be pressed again.
+  const unsent =
+    !!enrollment.incentive?.fromBalance &&
+    enrollment.incentive.status === "forwarding" &&
+    !enrollment.incentive.forwarding?.reference;
+
+  if (enrollment.incentive && !unsent && !["due", "sent"].includes(enrollment.incentive.status))
     throw new AppError("This realtor's reward is already under way or settled.", 409);
 
   if (!enrollment.registeredUser) throw new AppError("This enrollment has no account linked yet.", 409);
@@ -323,7 +337,9 @@ export const rewardFromBalancePreview = async (id: Types.ObjectId) => {
 
   const { available } = await getBalance(accountId);
 
-  const oldPayoutSentAt = enrollment.incentive?.status === "sent" ? (enrollment.incentive.sentAt ?? null) : null;
+  const oldPayoutSentAt =
+    (enrollment.incentive?.status === "sent" ? enrollment.incentive.sentAt : enrollment.incentive?.oldPayoutSentAt) ??
+    null;
 
   return { enrollment, walletAddress: wallet.address, balance: available, accountName, amount: INCENTIVE_PAYOUT, oldPayoutSentAt };
 };
@@ -346,7 +362,11 @@ export const sendRewardFromBalance = async (id: Types.ObjectId) => {
     {
       _id: id,
       status: trusted({ $ne: "pending" }),
-      $or: [{ incentive: trusted({ $exists: false }) }, { "incentive.status": trusted({ $in: ["due", "sent"] }) }],
+      $or: [
+        { incentive: trusted({ $exists: false }) },
+        { "incentive.status": trusted({ $in: ["due", "sent"] }) },
+        { "incentive.fromBalance": true, "incentive.status": "forwarding", "incentive.forwarding.reference": "" },
+      ],
     },
     {
       $set: {
@@ -365,7 +385,7 @@ export const sendRewardFromBalance = async (id: Types.ObjectId) => {
   if (!claimed) throw new AppError("This realtor's reward was started a moment ago.", 409);
 
   console.log(`Incentive for ${claimed.reference} started from the Planbok balance by an admin.`);
-  await startForwarding(id);
+  await startForwarding(id, true);
 
   return Enrollment.findById(id).lean();
 };
@@ -472,9 +492,11 @@ const sweep = async (): Promise<void> => {
 
   for (const { _id } of due) if (await startIncentive(_id)) started += 1;
 
+  // An admin's send from the Planbok balance moves only on a click, never from here.
   const toForward = await Enrollment.find({
     "incentive.status": "forwarding",
     "incentive.forwarding.reference": "",
+    "incentive.fromBalance": trusted({ $ne: true }),
   }).select("_id");
 
   for (const { _id } of toForward) if (await startForwarding(_id)) started += 1;

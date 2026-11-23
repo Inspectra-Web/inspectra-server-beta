@@ -27,7 +27,16 @@ export interface Holder {
 const UNREACHABLE = "We could not reach the payments service. Try again.";
 
 /** Planbok answered and turned the request down, so nothing was done. */
-export class PlanbokRefused extends AppError {}
+export class PlanbokRefused extends AppError {
+  /** Planbok's own reason, for an admin. The public message stays generic. */
+  constructor(
+    message: string,
+    statusCode: number,
+    public readonly reason: string,
+  ) {
+    super(message, statusCode);
+  }
+}
 
 const planbok = async (path: string, method = "GET", body?: object, apiKey = envConfig.PLANBOK_API_KEY) => {
   // Logs carry the error message only: Planbok's replies and query strings hold customer data.
@@ -53,7 +62,7 @@ const planbok = async (path: string, method = "GET", body?: object, apiKey = env
 
     // Only a 4xx is a definite no; a 5xx or an unreadable reply may have done the work.
     const refused = response.status >= 400 && response.status < 500;
-    throw refused ? new PlanbokRefused(UNREACHABLE, 502) : new AppError(UNREACHABLE, 502);
+    throw refused ? new PlanbokRefused(UNREACHABLE, 502, String(message)) : new AppError(UNREACHABLE, 502);
   }
 
   return result.data;
