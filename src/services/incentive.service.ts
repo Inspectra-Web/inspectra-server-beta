@@ -14,7 +14,7 @@ import {
   TransferRejected,
   type FlwTransfer,
 } from "./flutterwave.service.js";
-import { createPurchase } from "./lambacard.service.js";
+import { createPurchase, getPurchase, type LambaPurchase } from "./lambacard.service.js";
 import { getTransaction, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
 
 /**
@@ -130,10 +130,6 @@ export const settleIncentive = async (transfer: FlwTransfer): Promise<void> => {
   if (landed) await startForwarding(landed._id);
 };
 
-// LambaCard's account is at Loma but outside Planbok's own ledger: Planbok's internal Loma
-// lookup cannot find it, its external lookup on sort code 090620 can.
-const LAMBACARD_DESTINATION_TYPE = "other-banks";
-
 /**
  * The second hop: Planbok sends the ₦10,000 from our account to LambaCard's. Planbok's
  * reference for it is what the LambaCard purchase is made with. A refusal is retried; an
@@ -142,6 +138,7 @@ const LAMBACARD_DESTINATION_TYPE = "other-banks";
 export const startForwarding = async (id: Types.ObjectId): Promise<boolean> => {
   const {
     PLANBOK_ACCOUNT_ID: accountId,
+    PLANBOK_BANK_CODE: ourBankCode,
     LAMBACARD_BANK_CODE: sortCode,
     LAMBACARD_ACCOUNT_NUMBER: accountNumber,
     LAMBACARD_ACCOUNT_NAME: accountName,
@@ -179,7 +176,8 @@ export const startForwarding = async (id: Types.ObjectId): Promise<boolean> => {
       accountId,
       reference,
       toKobo(claimed.incentive.amount),
-      LAMBACARD_DESTINATION_TYPE,
+      // LambaCard's account is a Planbok virtual account too, so both sit at Loma (090620).
+      sortCode === ourBankCode ? "same-bank" : "other-banks",
       { accountNumber, sortCode, accountName },
       `INSPECTRA COURSE ${claimed.reference}`,
     );
@@ -299,6 +297,56 @@ export const startPurchase = async (id: Types.ObjectId): Promise<boolean> => {
 };
 
 /**
+ * Applies a purchase read back from LambaCard, never a webhook body. CONFIRMED ends it once
+ * the tokens are on chain (a sandbox simulation has no transaction); REJECTED ends it for an
+ * admin to settle with LambaCard. Anything else, RECONCILIATION_REQUIRED included, is still
+ * LambaCard's to finish, so only the status is recorded and the sweep keeps asking.
+ */
+export const settlePurchase = async (purchase: LambaPurchase): Promise<void> => {
+  const open: QueryFilter<IEnrollment> = {
+    "incentive.status": "purchasing",
+    "incentive.purchase.id": purchase.id,
+    "incentive.forwarding.providerReference": purchase.transactionReference,
+  };
+
+  const { status, settlementMode, settlement } = purchase;
+  const onChain = !!settlement.transactionHash;
+
+  if (status === "CONFIRMED" && (onChain || settlementMode === "SIMULATED")) {
+    await Enrollment.updateOne(open, {
+      $set: {
+        "incentive.status": "confirmed",
+        "incentive.purchase.status": status,
+        "incentive.purchase.customerTokenUnits": purchase.customerTokenUnits,
+        ...(onChain && {
+          "incentive.purchase.transactionHash": settlement.transactionHash,
+          "incentive.purchase.explorerUrl": settlement.explorerUrl,
+        }),
+        "incentive.purchase.confirmedAt": new Date(),
+      },
+    });
+    return;
+  }
+
+  if (status === "REJECTED") {
+    const rejected = await Enrollment.findOneAndUpdate(open, {
+      $set: { "incentive.status": "rejected", "incentive.purchase.status": status },
+    });
+
+    if (rejected) console.error(`Incentive purchase ${purchase.id} rejected by LambaCard: settle it with them.`);
+    return;
+  }
+
+  const moved = await Enrollment.findOneAndUpdate(
+    { ...open, "incentive.purchase.status": trusted({ $ne: status }) },
+    { $set: { "incentive.purchase.status": status } },
+  );
+
+  if (moved && status === "RECONCILIATION_REQUIRED")
+    console.error(`Incentive purchase ${purchase.id} needs reconciliation at LambaCard.`);
+};
+
+/**
  * Catches up on what the moment of payment could not finish: asks Flutterwave and Planbok
  * about transfers still in flight, then sends every hop still waiting (refused, failed, or
  * waiting on a balance). A hop sent with no id or reference back is left alone: its outcome
@@ -327,6 +375,23 @@ const sweep = async (): Promise<void> => {
 
   for (const { _id, incentive } of forwarded)
     await settleForwarding(_id, incentive!.forwarding!.providerReference!);
+
+  // Purchases still open. The only catch for one LambaCard stops reporting on, such as a
+  // payment check that timed out and sits at CREATED.
+  const buying = await Enrollment.find({
+    "incentive.status": "purchasing",
+    "incentive.purchase.id": trusted({ $exists: true }),
+  }).select("incentive.purchase.id");
+
+  for (const { incentive } of buying) {
+    const purchaseId = incentive!.purchase!.id;
+
+    try {
+      await settlePurchase(await getPurchase(purchaseId));
+    } catch (error) {
+      console.error(`Could not read incentive purchase ${purchaseId}: ${(error as Error).message}`);
+    }
+  }
 
   const due = await Enrollment.find({ "incentive.status": "due" }).select("_id");
   let started = 0;

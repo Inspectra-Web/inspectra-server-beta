@@ -1,3 +1,5 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import envConfig from "../config/env.config.js";
 
 /**
@@ -75,3 +77,33 @@ export const createPurchase = (input: {
 
 export const getPurchase = (id: string): Promise<LambaPurchase> =>
   lambacard(`/purchases/${encodeURIComponent(id)}`);
+
+/** How old a signed delivery may be before it is treated as a replay. */
+const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
+
+/**
+ * `lbt-webhook-signature: t=<unix seconds>,v1=<hex>`, an HMAC-SHA256 of `<t>.<raw body>`
+ * keyed with the whole secret, `whsec_` included. Found by testing their sandbox; their spec
+ * does not say.
+ */
+export const verifyWebhook = (rawBody: Buffer, header: string | undefined): boolean => {
+  const secret = envConfig.LAMBACARD_WEBHOOK_SECRET;
+  if (!secret || !header) return false;
+
+  const parts = header.split(",").map((part) => part.trim().split("="));
+  const timestamp = parts.find(([key]) => key === "t")?.[1];
+  const signatures = parts.filter(([key]) => key === "v1").map(([, value]) => value ?? "");
+
+  if (!timestamp || !signatures.length) return false;
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > WEBHOOK_TOLERANCE_SECONDS) return false;
+
+  const expected = createHmac("sha256", secret)
+    .update(`${timestamp}.`)
+    .update(rawBody)
+    .digest();
+
+  return signatures.some((signature) => {
+    const given = Buffer.from(signature, "hex");
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  });
+};

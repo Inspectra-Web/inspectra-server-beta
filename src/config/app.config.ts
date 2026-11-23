@@ -12,6 +12,7 @@ import courseRoute from "../routes/course.route.js";
 import identityRoute from "../routes/identity.route.js";
 import inquiryRoute from "../routes/inquiry.route.js";
 import inspectionRoute from "../routes/inspection.route.js";
+import lambacardRoute from "../routes/lambacard.route.js";
 import paymentRoute from "../routes/payment.route.js";
 import profileRoute from "../routes/profile.route.js";
 import propertyRoute from "../routes/property.route.js";
@@ -26,6 +27,9 @@ const appConfig = (app: Express): void => {
 
   app.use(helmet());
   app.use(cors({ origin: envConfig.CLIENT_URL, credentials: true }));
+
+  // Ahead of the body parsers: its signature is checked against the raw body.
+  app.use("/api/v1/lbt", lambacardRoute);
 
   app.use(express.json({ limit: "10kb" }));
   app.use(express.urlencoded({ extended: true, limit: "10kb" }));
