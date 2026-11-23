@@ -32,7 +32,9 @@ import {
   completeLessonUpload,
   deleteLesson,
   getAdminCourse,
+  getEnrollmentReward,
   listEnrollments,
+  sendEnrollmentReward,
   reorderLessons,
   saveCourse,
   setCourseStatus,
@@ -218,5 +220,8 @@ router.patch(
   setCourseStatus,
 );
 router.get("/course/enrollments", protect, restrictTo("admin"), listEnrollments);
+// A reward for a course paid before rewards existed, from money already in our Planbok account.
+router.get("/course/enrollments/:id/reward", protect, restrictTo("admin"), getEnrollmentReward);
+router.post("/course/enrollments/:id/reward", protect, restrictTo("admin"), sendEnrollmentReward);
 
 export default router;

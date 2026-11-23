@@ -64,6 +64,8 @@ export interface IIncentive {
   amount: number;
   status: IncentiveStatus;
   funding: IIncentiveTransfer;
+  /** Started by an admin from money already in our Planbok account, so there is no funding hop. */
+  fromBalance?: boolean;
   forwarding?: IIncentiveTransfer;
   purchase?: IIncentivePurchase;
   /** Only on `sent` rows. */
@@ -142,6 +144,7 @@ const incentiveSchema = new Schema<IIncentive>(
       default: "due",
     },
     funding: { type: transferSchema, default: () => ({}) },
+    fromBalance: { type: Boolean },
     forwarding: { type: transferSchema },
     purchase: { type: purchaseSchema },
     sentAt: { type: Date },
@@ -258,6 +261,7 @@ export const adminEnrollment = (e: EnrollmentRow) => ({
     /** Only on `sent` rows, paid straight to LambaCard before the purchase existed. */
     sentAt: e.incentive.sentAt,
     check: incentiveCheck(e.incentive),
+    fromBalance: !!e.incentive.fromBalance,
     // Each hop's references, which is what an admin searches Flutterwave, Planbok or
     // LambaCard by.
     funding: e.incentive.funding && {

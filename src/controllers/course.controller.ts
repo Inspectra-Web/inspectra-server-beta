@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { trusted, type PipelineStage, type Types } from "mongoose";
+import { trusted, Types, type PipelineStage } from "mongoose";
 
 import AppError from "../error/app.error.js";
 import Course, {
@@ -46,6 +46,7 @@ import {
   completeEnrollment,
 } from "../services/course.service.js";
 import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
+import { rewardFromBalancePreview, sendRewardFromBalance } from "../services/incentive.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
 import {
   courseAssetId,
@@ -54,6 +55,7 @@ import {
 } from "../services/upload.service.js";
 import {
   accessSchema,
+  enrollmentParamSchema,
   enrollmentReferenceSchema,
   inviteSchema,
   lessonParamSchema,
@@ -694,5 +696,27 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
       counts,
       registered: result?.registered[0]?.count ?? 0,
     },
+  });
+};
+
+/** What starting this enrollment's reward from the Planbok balance would do, or why it cannot. */
+export const getEnrollmentReward = async (req: Request, res: Response): Promise<void> => {
+  const { id } = enrollmentParamSchema.parse(req.params);
+  const { walletAddress, balance, accountName, amount } = await rewardFromBalancePreview(new Types.ObjectId(id));
+
+  res.status(200).json({
+    status: "success",
+    data: { amount, balance: balance / 100, accountName, walletAddress },
+  });
+};
+
+/** Moves ₦10,000 of the Planbok balance to LambaCard and buys this realtor's tokens. */
+export const sendEnrollmentReward = async (req: Request, res: Response): Promise<void> => {
+  const { id } = enrollmentParamSchema.parse(req.params);
+  const enrollment = await sendRewardFromBalance(new Types.ObjectId(id));
+
+  res.status(200).json({
+    status: "success",
+    data: { enrollment: enrollment && adminEnrollment(enrollment) },
   });
 };

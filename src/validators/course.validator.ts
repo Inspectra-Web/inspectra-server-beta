@@ -145,6 +145,8 @@ export const accessSchema = z.object({ access: secret("course link") });
 
 export const lessonParamSchema = z.object({ lessonId: objectId("lesson") });
 
+export const enrollmentParamSchema = z.object({ id: objectId("enrollment") });
+
 export const inviteSchema = z.object({ invite: secret("registration link") });
 
 const STATUS_FILTERS: (EnrollmentStatus | "all")[] = ["all", ...ENROLLMENT_STATUSES];
