@@ -515,10 +515,10 @@ export const listEnrollments = async (req, res) => {
 /** What starting this enrollment's reward from the Planbok balance would do, or why it cannot. */
 export const getEnrollmentReward = async (req, res) => {
     const { id } = enrollmentParamSchema.parse(req.params);
-    const { walletAddress, balance, accountName, amount } = await rewardFromBalancePreview(new Types.ObjectId(id));
+    const { walletAddress, balance, accountName, amount, oldPayoutSentAt } = await rewardFromBalancePreview(new Types.ObjectId(id));
     res.status(200).json({
         status: "success",
-        data: { amount, balance: balance / 100, accountName, walletAddress },
+        data: { amount, balance: balance / 100, accountName, walletAddress, oldPayoutSentAt },
     });
 };
 /** Moves ₦10,000 of the Planbok balance to LambaCard and buys this realtor's tokens. */

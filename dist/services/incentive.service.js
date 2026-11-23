@@ -231,7 +231,9 @@ export const rewardFromBalancePreview = async (id) => {
         throw new AppError("That enrollment does not exist.", 404);
     if (enrollment.status === "pending")
         throw new AppError("This course has not been paid for.", 409);
-    if (enrollment.incentive && enrollment.incentive.status !== "due")
+    // An old payout (`sent`) went straight to LambaCard with no purchase. It qualifies only
+    // once LambaCard has returned the money; the admin confirms that, the prompt says so.
+    if (enrollment.incentive && !["due", "sent"].includes(enrollment.incentive.status))
         throw new AppError("This realtor's reward is already under way or settled.", 409);
     if (!enrollment.registeredUser)
         throw new AppError("This enrollment has no account linked yet.", 409);
@@ -242,7 +244,8 @@ export const rewardFromBalancePreview = async (id) => {
     if (!accountId)
         throw new AppError("No Planbok account is set for rewards.", 503);
     const { available } = await getBalance(accountId);
-    return { enrollment, walletAddress: wallet.address, balance: available, accountName, amount: INCENTIVE_PAYOUT };
+    const oldPayoutSentAt = enrollment.incentive?.status === "sent" ? (enrollment.incentive.sentAt ?? null) : null;
+    return { enrollment, walletAddress: wallet.address, balance: available, accountName, amount: INCENTIVE_PAYOUT, oldPayoutSentAt };
 };
 /**
  * Starts a reward from money already in our Planbok account: no Flutterwave hop, straight
@@ -250,19 +253,20 @@ export const rewardFromBalancePreview = async (id) => {
  * conditional, so it cannot race the sweep or a second click into paying twice.
  */
 export const sendRewardFromBalance = async (id) => {
-    const { balance, amount } = await rewardFromBalancePreview(id);
+    const { balance, amount, oldPayoutSentAt } = await rewardFromBalancePreview(id);
     if (balance < toKobo(amount))
         throw new AppError(`The Planbok account holds ₦${(balance / 100).toLocaleString("en-NG")}, short of ₦${amount.toLocaleString("en-NG")}.`, 409);
     const claimed = await Enrollment.findOneAndUpdate({
         _id: id,
         status: trusted({ $ne: "pending" }),
-        $or: [{ incentive: trusted({ $exists: false }) }, { "incentive.status": "due" }],
+        $or: [{ incentive: trusted({ $exists: false }) }, { "incentive.status": trusted({ $in: ["due", "sent"] }) }],
     }, {
         $set: {
             incentive: {
                 amount,
                 status: "forwarding",
                 fromBalance: true,
+                ...(oldPayoutSentAt && { oldPayoutSentAt }),
                 funding: { reference: "", attempts: 0 },
                 forwarding: { reference: "", attempts: 0 },
             },
