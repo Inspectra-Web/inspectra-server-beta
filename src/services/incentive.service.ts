@@ -7,12 +7,14 @@ import Enrollment, {
   type IEnrollment,
   type IIncentive,
 } from "../models/enrollment.model.js";
+import Wallet from "../models/wallet.model.js";
 import {
   createTransfer,
   getTransfer,
   TransferRejected,
   type FlwTransfer,
 } from "./flutterwave.service.js";
+import { createPurchase } from "./lambacard.service.js";
 import { getTransaction, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
 
 /**
@@ -239,10 +241,61 @@ const settleForwarding = async (id: Types.ObjectId, providerReference: string): 
     return;
   }
 
-  await Enrollment.updateOne(
+  const forwarded = await Enrollment.updateOne(
     { _id: id, "incentive.status": "forwarding", "incentive.forwarding.providerReference": providerReference },
     { $set: { "incentive.status": "purchasing", "incentive.forwarding.sentAt": new Date() } },
   );
+
+  if (forwarded.modifiedCount) await startPurchase(id);
+};
+
+/**
+ * The third hop: LambaCard buys the tokens with Planbok's reference for the forwarded
+ * naira, into the realtor's own wallet. A realtor with no active wallet waits here. Safe to
+ * repeat: LambaCard replays the first purchase for the same reference and body, so a
+ * refusal or an unknown outcome is simply tried again by the next sweep.
+ */
+export const startPurchase = async (id: Types.ObjectId): Promise<boolean> => {
+  const row = await Enrollment.findOne({
+    _id: id,
+    "incentive.status": "purchasing",
+    "incentive.purchase": trusted({ $exists: false }),
+  }).select("incentive registeredUser");
+
+  const transactionReference = row?.incentive?.forwarding?.providerReference;
+  if (!row?.incentive || !transactionReference) return false;
+
+  const wallet = row.registeredUser
+    ? await Wallet.findOne({ user: row.registeredUser, status: "active" }).select("address")
+    : null;
+
+  if (!wallet?.address) return false;
+
+  try {
+    const purchase = await createPurchase({
+      transactionReference,
+      amountKobo: toKobo(row.incentive.amount),
+      walletAddress: wallet.address,
+    });
+
+    await Enrollment.updateOne(
+      { _id: id, "incentive.status": "purchasing", "incentive.purchase": trusted({ $exists: false }) },
+      {
+        $set: {
+          "incentive.purchase": {
+            id: purchase.id,
+            status: purchase.status,
+            walletAddress: purchase.walletAddress,
+            customerTokenUnits: purchase.customerTokenUnits,
+          },
+        },
+      },
+    );
+  } catch (error) {
+    console.error(`Incentive purchase for ${transactionReference} not made yet: ${(error as Error).message}`);
+  }
+
+  return true;
 };
 
 /**
@@ -287,7 +340,19 @@ const sweep = async (): Promise<void> => {
 
   for (const { _id } of toForward) if (await startForwarding(_id)) started += 1;
 
-  if (started) console.log(`Incentive sweep: started ${started} transfer(s).`);
+  const toPurchase = await Enrollment.find({
+    "incentive.status": "purchasing",
+    "incentive.purchase": trusted({ $exists: false }),
+  }).select("_id");
+
+  let waitingOnWallet = 0;
+  for (const { _id } of toPurchase) {
+    if (await startPurchase(_id)) started += 1;
+    else waitingOnWallet += 1;
+  }
+
+  if (started) console.log(`Incentive sweep: started ${started} transfer(s) or purchase(s).`);
+  if (waitingOnWallet) console.log(`Incentive sweep: ${waitingOnWallet} purchase(s) wait for a realtor wallet.`);
 };
 
 const SWEEP_EVERY = 15 * 60 * 1000;
