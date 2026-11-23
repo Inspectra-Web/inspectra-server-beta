@@ -162,7 +162,11 @@ export interface PlanbokTransfer {
   amount: string;
   currency: string;
   destinationType: string;
-  /** Not the transaction's reference: Planbok's own lookup refuses it (2026-11-23). Unused. */
+  /**
+   * Planbok's transfer id (36 letters and digits, same as transferId): what LambaCard's
+   * purchase validates. Not the transaction list's `reference` (a UUID), and Planbok's own
+   * transaction lookups refuse it, so the transfer is confirmed through the list by key.
+   */
   providerReference: string;
 }
 
@@ -176,12 +180,16 @@ export interface PlanbokTransaction {
   status: string;
 }
 
+/** A same-bank transfer needs only the account number; another bank also needs its sort code and the name. */
+export type TransferDestination =
+  | { type: "same-bank"; accountNumber: string }
+  | { type: "other-banks"; accountNumber: string; sortCode: string; accountName: string };
+
 export const transfer = async (
   accountId: string,
   idempotencyKey: string,
   amount: number,
-  destinationType: "same-bank" | "other-banks",
-  destination: { accountNumber: string; sortCode: string; accountName: string },
+  { type: destinationType, ...destination }: TransferDestination,
   narration: string,
 ): Promise<PlanbokTransfer> =>
   planbok(`/virtual-accounts/${accountId}/transfer`, "POST", {
