@@ -105,7 +105,7 @@ export const settleIncentive = async (transfer) => {
  */
 export const startForwarding = async (id, byAdmin = false) => {
     const { PLANBOK_ACCOUNT_ID: accountId, PLANBOK_BANK_CODE: ourBankCode, LAMBACARD_BANK_CODE: sortCode, LAMBACARD_ACCOUNT_NUMBER: accountNumber, LAMBACARD_ACCOUNT_NAME: accountName, } = envConfig;
-    if (!accountId || !sortCode || !accountNumber || !accountName) {
+    if (!accountId || !sortCode || !accountNumber || (sortCode !== ourBankCode && !accountName)) {
         console.error(`Incentive for enrollment ${String(id)} waits: no LambaCard account is set.`);
         return false;
     }
@@ -128,9 +128,17 @@ export const startForwarding = async (id, byAdmin = false) => {
     if (!claimed?.incentive)
         return false;
     try {
-        await transfer(accountId, reference, toKobo(claimed.incentive.amount), 
-        // LambaCard's account is a Planbok virtual account too, so both sit at Loma (090620).
-        sortCode === ourBankCode ? "same-bank" : "other-banks", { accountNumber, sortCode, accountName }, `INSPECTRA COURSE ${claimed.reference}`);
+        const sent = await transfer(accountId, reference, toKobo(claimed.incentive.amount), 
+        // LambaCard's account is a Planbok virtual account too, so both sit at Loma (090620):
+        // same-bank, by account number alone.
+        sortCode === ourBankCode
+            ? { type: "same-bank", accountNumber }
+            : { type: "other-banks", accountNumber, sortCode, accountName }, `INSPECTRA COURSE ${claimed.reference}`);
+        // The one id LambaCard can validate, and the reply is the only place it appears.
+        if (sent.providerReference)
+            await Enrollment.updateOne({ _id: id, "incentive.forwarding.reference": reference }, { $set: { "incentive.forwarding.providerReference": sent.providerReference } });
+        else
+            console.error(`Incentive ${reference} sent, but Planbok gave no transfer id: check Planbok.`);
         await settleForwarding(id, reference);
     }
     catch (error) {
@@ -149,10 +157,10 @@ export const startForwarding = async (id, byAdmin = false) => {
     return true;
 };
 /**
- * Finds the forwarding transfer at Planbok by our key and, once it has settled for the
- * right amount, records Planbok's reference for it (the one the LambaCard purchase is made
- * with) and hands the incentive on to the purchase. Anything else leaves it where it is.
- * Also settles a send whose reply never came back, once Planbok lists it.
+ * Confirms the forwarding transfer at Planbok, found by our key, and once it has settled
+ * for the right amount hands the incentive on to the purchase, which is made with the
+ * transfer id kept from the reply. Without that id there is nothing LambaCard can validate,
+ * so a send whose reply never came back waits for an admin. Anything else leaves it be.
  */
 const settleForwarding = async (id, key) => {
     const open = {
@@ -180,10 +188,13 @@ const settleForwarding = async (id, key) => {
         console.error(`Incentive forward ${key} does not match the payout: check Planbok.`);
         return;
     }
+    if (!row.incentive.forwarding?.providerReference) {
+        console.error(`Incentive forward ${key} went through, but its Planbok transfer id is unknown: check Planbok.`);
+        return;
+    }
     const forwarded = await Enrollment.updateOne(open, {
         $set: {
             "incentive.status": "purchasing",
-            "incentive.forwarding.providerReference": settled.reference,
             "incentive.forwarding.sentAt": new Date(),
         },
     });

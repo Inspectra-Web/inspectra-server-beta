@@ -84,7 +84,7 @@ export const nameEnquiry = async (accountNumber, sortCode) => {
     const { account } = await planbok(`/virtual-accounts/name/enquiry?${query}`);
     return { accountNumber: account.accountNumber, accountName: account.accountName, bankCode: account.bankCode };
 };
-export const transfer = async (accountId, idempotencyKey, amount, destinationType, destination, narration) => planbok(`/virtual-accounts/${accountId}/transfer`, "POST", {
+export const transfer = async (accountId, idempotencyKey, amount, { type: destinationType, ...destination }, narration) => planbok(`/virtual-accounts/${accountId}/transfer`, "POST", {
     idempotencyKey,
     encryptedOrganizationSecret: await encryptedSecret("verify"),
     amount: toNaira(amount),
