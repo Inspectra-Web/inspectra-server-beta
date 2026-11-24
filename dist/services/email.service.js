@@ -717,6 +717,34 @@ export const sendCourseAccess = (to, course) => notify(course.reference, () => s
         ],
     }),
 }));
+/** "25.000000000000000000" -> "25", "1.500000000000000000" -> "1.5". */
+const tokenAmount = (tokens) => tokens.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+/**
+ * The course reward has landed: LambaCard confirmed the LBT on chain in the realtor's
+ * wallet. Sent once, from the moment the reward is recorded as delivered.
+ */
+export const sendTokenReward = (to, reward) => notify(reward.reference, () => sendEmail({
+    to,
+    subject: `Your ${tokenAmount(reward.tokens)} LBT reward is in your wallet`,
+    ...layout({
+        eyebrow: "Course reward",
+        preheader: `${tokenAmount(reward.tokens)} LBT from your INSPECTRA realtor course has landed in your wallet.`,
+        reason: "You're getting this because you paid for the INSPECTRA realtor course.",
+        blocks: [
+            heading(`Your reward has arrived, ${displayName(reward.name).split(" ")[0]}`),
+            lead(`${tokenAmount(reward.tokens)} LBT from your INSPECTRA realtor course is now in your wallet on BNB Smart Chain.`),
+            slip({ ref: reward.reference, status: "Delivered", tone: "verified", title: "Course reward" }),
+            rows([
+                ["Tokens", `${tokenAmount(reward.tokens)} LBT`],
+                ["Wallet", reward.walletAddress],
+            ]),
+            button("View your wallet", `${envConfig.CLIENT_URL}/realtor/wallet`),
+            ...(reward.explorerUrl
+                ? [note(`The transfer is public on BNB Smart Chain: ${reward.explorerUrl}`)]
+                : []),
+        ],
+    }),
+}));
 /** To the realtor, once Planbok has opened the account. Sent once, not on a repeat open. */
 export const sendVirtualAccountOpened = (to, account) => notify(to, () => sendEmail({
     to,
