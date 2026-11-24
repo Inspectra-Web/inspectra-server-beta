@@ -6,6 +6,7 @@ import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Enrollment, {
   INCENTIVE_PAYOUT,
+  toTokenAmount,
   INCENTIVE_REFERENCE_PREFIX,
   type IEnrollment,
   type IIncentive,
@@ -17,6 +18,7 @@ import {
   TransferRejected,
   type FlwTransfer,
 } from "./flutterwave.service.js";
+import { sendTokenReward } from "./email.service.js";
 import { createPurchase, getPurchase, type LambaPurchase } from "./lambacard.service.js";
 import { findTransfer, getBalance, PlanbokRefused, toKobo, transfer } from "./planbok.service.js";
 
@@ -419,7 +421,9 @@ export const settlePurchase = async (purchase: LambaPurchase): Promise<void> => 
   const onChain = !!settlement.transactionHash;
 
   if (status === "CONFIRMED" && (onChain || settlementMode === "SIMULATED")) {
-    await Enrollment.updateOne(open, {
+    // Conditional on still purchasing, so only the first of the webhook and the sweep
+    // gets the row back, and the realtor hears once.
+    const delivered = await Enrollment.findOneAndUpdate(open, {
       $set: {
         "incentive.status": "confirmed",
         "incentive.purchase.status": status,
@@ -430,7 +434,16 @@ export const settlePurchase = async (purchase: LambaPurchase): Promise<void> => 
         }),
         "incentive.purchase.confirmedAt": new Date(),
       },
-    });
+    }, { returnDocument: "after" });
+
+    if (delivered?.incentive?.purchase)
+      sendTokenReward(delivered.email, {
+        name: delivered.fullname,
+        reference: delivered.reference,
+        tokens: toTokenAmount(delivered.incentive.purchase.customerTokenUnits),
+        walletAddress: delivered.incentive.purchase.walletAddress,
+        explorerUrl: delivered.incentive.purchase.explorerUrl,
+      });
     return;
   }
 
