@@ -5,11 +5,16 @@ import Enrollment, { toTokenAmount, } from "../models/enrollment.model.js";
 import Identity from "../models/identity.model.js";
 import Wallet, { publicWallet } from "../models/wallet.model.js";
 import { createWallet, getWalletBalances } from "../services/planbok.service.js";
+import { getPrices } from "../services/price.service.js";
 import { ensureReferralCode } from "../services/referral.service.js";
 const NOT_CREATED = "We could not create your wallet. Try again later.";
 export const getMyWallet = async (req, res) => {
     const wallet = await Wallet.findOne({ user: req.user._id });
     res.status(200).json({ status: "success", data: { wallet: wallet && publicWallet(wallet) } });
+};
+/** Naira and dollars per LBT and BNB, for the values beside a realtor's tokens. A price that cannot be had is null. */
+export const getTokenPrices = async (_req, res) => {
+    res.status(200).json({ status: "success", data: { prices: await getPrices() } });
 };
 // Apart from getMyWallet, so a Planbok outage fails the balance and not the address.
 export const getMyWalletBalances = async (req, res) => {

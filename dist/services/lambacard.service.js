@@ -38,6 +38,8 @@ export const createPurchase = (input) => lambacard("/purchases", "POST", {
     ...(isSandbox() && envConfig.LAMBACARD_EXECUTE_ON_CHAIN && { executeOnChain: true }),
 });
 export const getPurchase = (id) => lambacard(`/purchases/${encodeURIComponent(id)}`);
+/** The same price for sandbox and live keys; new purchases are made at it. */
+export const getPricing = () => lambacard("/pricing");
 /** How old a signed delivery may be before it is treated as a replay. */
 const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 /**
