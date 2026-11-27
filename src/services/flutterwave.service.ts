@@ -14,6 +14,8 @@ export interface FlwTransfer {
   reference: string;
   amount: number;
   status: TransferStatus;
+  /** What Flutterwave charged for it, debited from our balance on top of the amount. */
+  fee?: number;
   complete_message?: string;
 }
 
@@ -110,6 +112,25 @@ export const getRefund = async (id: number): Promise<FlwRefund> => {
   return body.data;
 };
 
+/**
+ * Flutterwave's fee for an NGN bank transfer of this amount, in naira. The reply is
+ * `data: [{ currency, fee_type: "value", fee }]`; the fee can carry three decimals (26.875).
+ */
+export const getTransferFee = async (amount: number): Promise<number> => {
+  const query = new URLSearchParams({ amount: String(amount), currency: "NGN", type: "account" });
+  const response = await fetch(`${envConfig.FLW_BASE_URL}/transfers/fee?${query}`, { headers });
+  const body = (await response.json().catch(() => ({}))) as {
+    message?: string;
+    data?: { currency?: string; fee_type?: string; fee?: number }[];
+  };
+
+  const quote = body.data?.find((entry) => entry.currency === "NGN");
+  if (!response.ok || quote?.fee_type !== "value" || typeof quote.fee !== "number")
+    throw new Error(body.message ?? `Could not read the transfer fee (${response.status})`);
+
+  return quote.fee;
+};
+
 /** The transfer as Flutterwave holds it. Trusted over any webhook body. */
 export const getTransfer = async (id: number): Promise<FlwTransfer> => {
   const response = await fetch(`${envConfig.FLW_BASE_URL}/transfers/${id}`, { headers });
@@ -133,6 +154,8 @@ export interface FlwTransaction {
   currency: string;
   status: string;
   payment_type?: string;
+  /** Flutterwave's fee on the charge, in naira. */
+  app_fee?: number;
   card?: { last_4digits?: string; type?: string };
   meta?: {
     reference?: string;
@@ -145,6 +168,7 @@ export interface FlwTransaction {
     fullname?: string;
     email?: string;
     phone?: string;
+    referralCode?: string;
   };
 }
 

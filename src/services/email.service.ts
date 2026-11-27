@@ -1103,7 +1103,14 @@ export interface TokenRewardBrief {
 }
 
 /** "25.000000000000000000" -> "25", "1.500000000000000000" -> "1.5". */
-const tokenAmount = (tokens: string): string => tokens.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+/** "3565.726315789473684210" -> "3,565.726315": grouped, cut (not rounded) at six decimals, like the wallet page. */
+const tokenAmount = (tokens: string): string => {
+  const [whole = "0", fraction = ""] = tokens.split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const cut = fraction.slice(0, 6).replace(/0+$/, "");
+
+  return cut ? `${grouped}.${cut}` : grouped;
+};
 
 /**
  * The course reward has landed: LambaCard confirmed the LBT on chain in the realtor's
@@ -1124,6 +1131,46 @@ export const sendTokenReward = (to: string, reward: TokenRewardBrief): void =>
             `${tokenAmount(reward.tokens)} LBT from your INSPECTRA realtor course is now in your wallet on BNB Smart Chain.`,
           ),
           slip({ ref: reward.reference, status: "Delivered", tone: "verified", title: "Course reward" }),
+          rows([
+            ["Tokens", `${tokenAmount(reward.tokens)} LBT`],
+            ["Wallet", reward.walletAddress],
+          ]),
+          button("View your wallet", `${envConfig.CLIENT_URL}/realtor/wallet`),
+          ...(reward.explorerUrl
+            ? [note(`The transfer is public on BNB Smart Chain: ${reward.explorerUrl}`)]
+            : []),
+        ],
+      }),
+    }),
+  );
+
+export interface ReferralRewardBrief {
+  /** The referrer. */
+  name: string;
+  /** The first name of the realtor they referred, whose course paid for it. */
+  referredName: string;
+  reference: string;
+  tokens: string;
+  walletAddress: string;
+  explorerUrl?: string;
+}
+
+/** To the referrer, once the tokens from a course they referred are on chain. */
+export const sendReferralReward = (to: string, reward: ReferralRewardBrief): void =>
+  notify(`${reward.reference} referral`, () =>
+    sendEmail({
+      to,
+      subject: `You earned ${tokenAmount(reward.tokens)} LBT for a referral`,
+      ...layout({
+        eyebrow: "Referral reward",
+        preheader: `${displayName(reward.referredName)} joined INSPECTRA through your link.`,
+        reason: "You're getting this because a realtor you referred paid for the INSPECTRA realtor course.",
+        blocks: [
+          heading(`Your referral paid off, ${displayName(reward.name).split(" ")[0]}`),
+          lead(
+            `${displayName(reward.referredName)} joined INSPECTRA through your link. ${tokenAmount(reward.tokens)} LBT is now in your wallet on BNB Smart Chain.`,
+          ),
+          slip({ ref: reward.reference, status: "Delivered", tone: "verified", title: "Referral reward" }),
           rows([
             ["Tokens", `${tokenAmount(reward.tokens)} LBT`],
             ["Wallet", reward.walletAddress],

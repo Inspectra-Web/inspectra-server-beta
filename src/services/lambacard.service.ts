@@ -17,6 +17,10 @@ export interface LambaPurchase {
   fiatAmountMinor: string;
   /** LBT in base units, 18 decimals. */
   customerTokenUnits: string;
+  /** The referrer's wallet, or null for a purchase with no referrer. */
+  referrerAddress: string | null;
+  /** The referrer's LBT in base units; "0" with no referrer. */
+  referralTokenUnits: string;
   settlementMode: "SIMULATED" | "ON_CHAIN";
   settlement: {
     status: string | null;
@@ -65,12 +69,15 @@ export const createPurchase = (input: {
   transactionReference: string;
   amountKobo: number;
   walletAddress: string;
+  /** The realtor who referred the buyer. LambaCard's referral split takes it out of the buyer's share. */
+  referrerAddress?: string;
 }): Promise<LambaPurchase> =>
   lambacard("/purchases", "POST", {
     transactionReference: input.transactionReference,
     fiatAmountMinor: String(input.amountKobo),
     currency: "NGN",
     walletAddress: input.walletAddress,
+    ...(input.referrerAddress && { referrerAddress: input.referrerAddress }),
     // Sandbox only: settle on BSC Testnet instead of simulating. A live key never sends it.
     ...(isSandbox() && envConfig.LAMBACARD_EXECUTE_ON_CHAIN && { executeOnChain: true }),
   });

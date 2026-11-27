@@ -16,6 +16,7 @@ import Course, {
 import Enrollment, {
   adminEnrollment,
   learnerEnrollment,
+  type ReferrerCard,
   type EnrollmentDoc,
   type EnrollmentStatus,
   type IEnrollment,
@@ -47,6 +48,7 @@ import {
 } from "../services/course.service.js";
 import { sendCourseAccess, sendVerifyEmail } from "../services/email.service.js";
 import { rewardFromBalancePreview, sendRewardFromBalance } from "../services/incentive.service.js";
+import { referrerFor } from "../services/referral.service.js";
 import { createCheckout, verifyTransaction } from "../services/flutterwave.service.js";
 import {
   courseAssetId,
@@ -59,9 +61,12 @@ import {
   enrollmentReferenceSchema,
   inviteSchema,
   lessonParamSchema,
+  referralCodeParamSchema,
   listEnrollmentsSchema,
   saveCourseSchema,
   type CancelLessonUploadInput,
+  type CheckoutCourseInput,
+  type ReferralFilter,
   type CompleteLessonUploadInput,
   type CourseStatusInput,
   type SignLessonPartsInput,
@@ -73,6 +78,14 @@ import {
 } from "../validators/course.validator.js";
 
 /* Public ------------------------------------------------------------------------ */
+
+/** Who a referral link belongs to, by first name only, so the checkout can say so. */
+export const getReferrer = async (req: Request, res: Response): Promise<void> => {
+  const { code } = referralCodeParamSchema.parse(req.params);
+  const { firstName } = await referrerFor(code);
+
+  res.status(200).json({ status: "success", data: { firstName } });
+};
 
 /** The sales page: the published course without its video, or null while in draft. */
 export const getCourse = async (_req: Request, res: Response): Promise<void> => {
@@ -128,6 +141,7 @@ const openCheckout = (enrollment: EnrollmentDoc): Promise<string> => {
       email,
       phone,
       ...(enrollment.registeredUser && { user: String(enrollment.registeredUser) }),
+      ...(enrollment.referral && { referralCode: enrollment.referral.code }),
     },
   });
 };
@@ -138,7 +152,7 @@ const openCheckout = (enrollment: EnrollmentDoc): Promise<string> => {
  * leaves an account that can sign in and pay from there.
  */
 export const joinCourse = async (req: Request, res: Response): Promise<void> => {
-  const { fullname, email, phone, password }: JoinCourseInput = req.body;
+  const { fullname, email, phone, password, referralCode }: JoinCourseInput = req.body;
 
   const course = await publishedCourse();
 
@@ -147,6 +161,9 @@ export const joinCourse = async (req: Request, res: Response): Promise<void> => 
   if (await User.exists({ email }))
     throw new AppError("An account with this email already exists. Sign in to buy the course.", 409);
   await refuseRepeatBuyer(email);
+
+  // Checked before anything is written, so a bad link leaves no account behind.
+  const referred = referralCode ? await referrerFor(referralCode) : null;
 
   const { user, verifyUrl } = await createAccount({
     fullname,
@@ -166,6 +183,7 @@ export const joinCourse = async (req: Request, res: Response): Promise<void> => 
     amount: course.price,
     registeredUser: user._id,
     registeredAt: new Date(),
+    ...(referred && { referral: referred.referral }),
   });
 
   // The account exists whatever the mailer does, so a failed send is logged, not thrown.
@@ -182,6 +200,7 @@ export const joinCourse = async (req: Request, res: Response): Promise<void> => 
 /** A signed-in realtor whose console is still locked, paying from their account. */
 export const checkoutCourse = async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
+  const { referralCode }: CheckoutCourseInput = req.body;
 
   // Any realtor may buy it: one waiting on payment, or one whose dashboard was open before
   // the course existed.
@@ -193,6 +212,8 @@ export const checkoutCourse = async (req: Request, res: Response): Promise<void>
   if (await Enrollment.exists({ registeredUser: user._id, status: PAID }))
     throw new AppError("You have already paid for the course. Open it from your dashboard.", 409);
 
+  const referred = referralCode ? await referrerFor(referralCode, user._id) : null;
+
   await Enrollment.deleteMany({ registeredUser: user._id, status: "pending" });
 
   const enrollment = await Enrollment.create({
@@ -202,6 +223,7 @@ export const checkoutCourse = async (req: Request, res: Response): Promise<void>
     amount: course.price,
     registeredUser: user._id,
     registeredAt: new Date(),
+    ...(referred && { referral: referred.referral }),
   });
   const link = await openCheckout(enrollment);
 
@@ -631,21 +653,39 @@ export const setCourseStatus = async (req: Request, res: Response): Promise<void
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 interface EnrollmentPage {
-  rows: (IEnrollment & { _id: Types.ObjectId })[];
+  rows: (IEnrollment & { _id: Types.ObjectId; referrerUser?: ReferrerCard[] })[];
   total: { count: number }[];
   statuses: { _id: EnrollmentStatus; count: number }[];
+  referrals: { _id: boolean; count: number }[];
   registered: { count: number }[];
 }
 
+const REFERRAL_MATCH: Record<Exclude<ReferralFilter, "all">, object> = {
+  referred: { referral: { $exists: true } },
+  direct: { referral: { $exists: false } },
+};
+
+/** One enrollment for the admin, with the referrer's name read off their account. */
+const withReferrer = async (enrollment: IEnrollment & { _id: Types.ObjectId }) => {
+  const referrer = enrollment.referral
+    ? await User.findById(enrollment.referral.referrer).select("fullname email").lean()
+    : null;
+
+  return adminEnrollment(enrollment, referrer);
+};
+
 /**
- * Everyone who started a checkout. The search narrows every branch; the status narrows
- * only `rows` and `total`, so the status counts never empty the control they sit on.
+ * Everyone who started a checkout. The search narrows every branch; the status and the
+ * referral filter narrow only `rows` and `total`, so their counts never empty the control
+ * they sit on.
  */
 export const listEnrollments = async (req: Request, res: Response): Promise<void> => {
-  const { q, status, page, limit } = listEnrollmentsSchema.parse(req.query);
+  const { q, status, referral, page, limit } = listEnrollmentsSchema.parse(req.query);
 
-  const statusMatch: PipelineStage.FacetPipelineStage[] =
-    status === "all" ? [] : [{ $match: { status } }];
+  const statusMatch: PipelineStage.FacetPipelineStage[] = [
+    ...(status === "all" ? [] : [{ $match: { status } }]),
+    ...(referral === "all" ? [] : [{ $match: REFERRAL_MATCH[referral] }]),
+  ];
 
   const pipeline: PipelineStage[] = [];
 
@@ -663,9 +703,19 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
         { $sort: { createdAt: -1, _id: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
+        {
+          $lookup: {
+            from: "users",
+            localField: "referral.referrer",
+            foreignField: "_id",
+            as: "referrerUser",
+            pipeline: [{ $project: { _id: 0, fullname: 1, email: 1 } }],
+          },
+        },
       ],
       total: [...statusMatch, { $count: "count" }],
       statuses: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+      referrals: [{ $group: { _id: { $ne: [{ $type: "$referral" }, "missing"] }, count: { $sum: 1 } } }],
       // Joined: paid, with an account, since paying is what opens the dashboard. An account
       // alone is not it: one opened at checkout exists before paying.
       registered: [
@@ -683,17 +733,24 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
     counts.all += row.count;
   }
 
+  const referrals: Record<ReferralFilter, number> = { all: 0, referred: 0, direct: 0 };
+  for (const row of result?.referrals ?? []) {
+    referrals[row._id ? "referred" : "direct"] += row.count;
+    referrals.all += row.count;
+  }
+
   const total = result?.total[0]?.count ?? 0;
 
   res.status(200).json({
     status: "success",
     data: {
-      enrollments: (result?.rows ?? []).map(adminEnrollment),
+      enrollments: (result?.rows ?? []).map(({ referrerUser, ...row }) => adminEnrollment(row, referrerUser?.[0] ?? null)),
       total,
       page,
       limit,
       pages: Math.max(1, Math.ceil(total / limit)),
       counts,
+      referrals,
       registered: result?.registered[0]?.count ?? 0,
     },
   });
@@ -702,23 +759,22 @@ export const listEnrollments = async (req: Request, res: Response): Promise<void
 /** What starting this enrollment's reward from the Planbok balance would do, or why it cannot. */
 export const getEnrollmentReward = async (req: Request, res: Response): Promise<void> => {
   const { id } = enrollmentParamSchema.parse(req.params);
-  const { walletAddress, balance, accountName, amount, oldPayoutSentAt } = await rewardFromBalancePreview(
-    new Types.ObjectId(id),
-  );
+  const { walletAddress, balance, accountName, amount, forwarded, oldPayoutSentAt } =
+    await rewardFromBalancePreview(new Types.ObjectId(id));
 
   res.status(200).json({
     status: "success",
-    data: { amount, balance: balance / 100, accountName, walletAddress, oldPayoutSentAt },
+    data: { amount, forwarded, balance: balance / 100, accountName, walletAddress, oldPayoutSentAt },
   });
 };
 
-/** Moves ₦10,000 of the Planbok balance to LambaCard and buys this realtor's tokens. */
+/** Takes ₦10,000 of the Planbok balance (₦9,985 to LambaCard, ₦15 Planbok's fee) and buys this realtor's tokens. */
 export const sendEnrollmentReward = async (req: Request, res: Response): Promise<void> => {
   const { id } = enrollmentParamSchema.parse(req.params);
   const enrollment = await sendRewardFromBalance(new Types.ObjectId(id));
 
   res.status(200).json({
     status: "success",
-    data: { enrollment: enrollment && adminEnrollment(enrollment) },
+    data: { enrollment: enrollment && (await withReferrer(enrollment)) },
   });
 };

@@ -1,11 +1,17 @@
 import type { Request, Response } from "express";
-import { trusted, type Types } from "mongoose";
+import { trusted, type QueryFilter, type Types } from "mongoose";
 
+import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
-import Enrollment, { toTokenAmount, type IEnrollment } from "../models/enrollment.model.js";
+import Enrollment, {
+  toTokenAmount,
+  type EnrollmentStatus,
+  type IEnrollment,
+} from "../models/enrollment.model.js";
 import Identity from "../models/identity.model.js";
 import Wallet, { publicWallet } from "../models/wallet.model.js";
 import { createWallet, getWalletBalances, type PlanbokWallet } from "../services/planbok.service.js";
+import { ensureReferralCode } from "../services/referral.service.js";
 
 const NOT_CREATED = "We could not create your wallet. Try again later.";
 
@@ -25,22 +31,31 @@ export const getMyWalletBalances = async (req: Request, res: Response): Promise<
   res.status(200).json({ status: "success", data: { balances } });
 };
 
+type EnrollmentRow = IEnrollment & { _id: Types.ObjectId };
+
+const PAID_STATUSES: EnrollmentStatus[] = ["paid", "completed"];
+const PAID = trusted({ $in: PAID_STATUSES });
+
 /**
- * The LBT a realtor earns, today one reward per paid course. The realtor sees three states
- * only: delivered, on its way, or delayed (LambaCard rejected the purchase, or it was paid
- * the old way with no purchase): an admin settles those. The amount shows once LambaCard
- * has quoted it, never before.
+ * The LBT a realtor earns: one reward for their own paid course, and one for every course
+ * a realtor they referred paid for. The realtor sees three states only: delivered, on its
+ * way, or delayed (LambaCard rejected the purchase, or it was paid the old way with no
+ * purchase): an admin settles those. The amount shows once LambaCard has quoted it, never
+ * before.
  */
-const realtorReward = (enrollment: IEnrollment & { _id: Types.ObjectId }) => {
+const realtorReward = (enrollment: EnrollmentRow, source: "course" | "referral") => {
   const { status, purchase } = enrollment.incentive!;
   const delayed = status === "rejected" || status === "sent";
+  const units = source === "course" ? purchase?.customerTokenUnits : purchase?.referralTokenUnits;
 
   return {
     id: enrollment._id,
-    source: "course" as const,
+    source,
+    // Only the first name of the realtor a referral came from.
+    ...(source === "referral" && { referredName: enrollment.fullname.trim().split(/\s+/)[0] ?? "" }),
     earnedAt: enrollment.paidAt,
     status: status === "confirmed" ? "delivered" : delayed ? "delayed" : "on_its_way",
-    tokens: purchase ? toTokenAmount(purchase.customerTokenUnits) : null,
+    tokens: units ? toTokenAmount(units) : null,
     symbol: "LBT",
     explorerUrl: status === "confirmed" ? (purchase?.explorerUrl ?? null) : null,
     deliveredAt: status === "confirmed" ? (purchase?.confirmedAt ?? null) : null,
@@ -48,14 +63,60 @@ const realtorReward = (enrollment: IEnrollment & { _id: Types.ObjectId }) => {
 };
 
 export const getMyRewards = async (req: Request, res: Response): Promise<void> => {
-  const enrollments = await Enrollment.find({
-    registeredUser: req.user!._id,
+  const me = req.user!._id;
+  const referredByMe: QueryFilter<IEnrollment> = {
+    "referral.referrer": me,
+    status: PAID,
     "incentive.status": trusted({ $exists: true }),
-  })
-    .sort({ paidAt: -1 })
+  };
+
+  const [own, referred] = await Promise.all([
+    Enrollment.find({ registeredUser: me, "incentive.status": trusted({ $exists: true }) }).lean(),
+    Enrollment.find(referredByMe).lean(),
+  ]);
+
+  const rewards = [
+    ...own.map((e) => realtorReward(e, "course")),
+    ...referred.map((e) => realtorReward(e, "referral")),
+  ].sort((a, b) => (b.earnedAt?.getTime() ?? 0) - (a.earnedAt?.getTime() ?? 0));
+
+  res.status(200).json({ status: "success", data: { rewards } });
+};
+
+/**
+ * The realtor's referral link and what it has earned. Only a realtor with an active wallet
+ * can refer, since that is where the referrer's tokens land; the code is issued on the
+ * first ask. A referral counts once the course is paid for.
+ */
+export const getMyReferral = async (req: Request, res: Response): Promise<void> => {
+  const me = req.user!._id;
+
+  const wallet = await Wallet.findOne({ user: me, status: "active" }).select("_id");
+  if (!wallet) throw new AppError("Create your wallet to start referring realtors.", 403);
+
+  const code = await ensureReferralCode(me);
+
+  const paidReferrals: QueryFilter<IEnrollment> = { "referral.referrer": me, status: PAID };
+  const referred = await Enrollment.find(paidReferrals)
+    .select("incentive.status incentive.purchase.referralTokenUnits")
     .lean();
 
-  res.status(200).json({ status: "success", data: { rewards: enrollments.map(realtorReward) } });
+  const delivered = referred.filter((e) => e.incentive?.status === "confirmed");
+  const units = delivered.reduce((sum, e) => sum + BigInt(e.incentive?.purchase?.referralTokenUnits ?? "0"), 0n);
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      referral: {
+        code,
+        link: `${envConfig.CLIENT_URL.replace(/\/+$/, "")}/course?ref=${code}`,
+        referred: referred.length,
+        delivered: delivered.length,
+        tokens: toTokenAmount(units.toString()),
+        symbol: "LBT",
+      },
+    },
+  });
 };
 
 export const openMyWallet = async (req: Request, res: Response): Promise<void> => {

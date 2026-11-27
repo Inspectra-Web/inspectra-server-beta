@@ -4,9 +4,10 @@ import { COURSE_STATUSES, MAX_LESSONS } from "../models/course.model.js";
 import { MAX_VIDEO_BYTES } from "../services/r2.service.js";
 import {
   ENROLLMENT_STATUSES,
-  INCENTIVE_PAYOUT,
+  MIN_COURSE_PRICE,
   type EnrollmentStatus,
 } from "../models/enrollment.model.js";
+import { REFERRAL_CODE } from "../models/user.model.js";
 import { email, password, passwordsMatch } from "./auth.validator.js";
 
 const PAGE_SIZE = 10;
@@ -17,6 +18,12 @@ const TEXT_MAX = 2000;
 // The raw secrets are 64 hex characters (randomBytes(32)).
 const secret = (label: string) =>
   z.string().regex(/^[0-9a-f]{64}$/i, `That ${label} is not valid`);
+
+const referralCode = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(REFERRAL_CODE, "That referral link is not valid");
 
 /**
  * The checkout that opens the realtor account too. Strict, and carrying no amount: the
@@ -29,10 +36,16 @@ export const joinCourseSchema = z
     phone: z.string("Required").trim().min(7, "Enter a valid phone number").max(20),
     password,
     confirmPassword: z.string("Required").min(1, "Confirm your password"),
+    referralCode: referralCode.optional(),
   })
   .refine((v) => v.password === v.confirmPassword, passwordsMatch);
 
 export type JoinCourseInput = z.infer<typeof joinCourseSchema>;
+
+/** A signed-in realtor's checkout. The body is optional: most carry no referral. */
+export const checkoutCourseSchema = z.strictObject({ referralCode: referralCode.optional() }).default({});
+
+export type CheckoutCourseInput = z.infer<typeof checkoutCourseSchema>;
 
 /** The transaction id on Flutterwave's redirect: a claim to check, not proof. */
 export const verifyEnrollmentSchema = z.strictObject({
@@ -55,11 +68,11 @@ export const saveCourseSchema = z.strictObject({
   subtitle: z.string().trim().max(300),
   description: z.string().trim().max(TEXT_MAX),
   cover: url,
-  // ₦10,000 of every payment funds the realtor's incentive, so the price must clear it.
+  // 70% of a direct course buys the realtor's tokens, so the price keeps that above ₦10,000.
   price: z
     .number()
     .int("Whole naira only")
-    .gt(INCENTIVE_PAYOUT, "The course costs more than ₦10,000, which funds the realtor's incentive"),
+    .min(MIN_COURSE_PRICE, `At least ₦${MIN_COURSE_PRICE.toLocaleString("en-NG")}, so the realtor's reward stays above ₦10,000`),
 });
 
 export type SaveCourseInput = z.infer<typeof saveCourseSchema>;
@@ -149,11 +162,16 @@ export const enrollmentParamSchema = z.object({ id: objectId("enrollment") });
 
 export const inviteSchema = z.object({ invite: secret("registration link") });
 
+export const referralCodeParamSchema = z.object({ code: referralCode });
+
 const STATUS_FILTERS: (EnrollmentStatus | "all")[] = ["all", ...ENROLLMENT_STATUSES];
+export const REFERRAL_FILTERS = ["all", "referred", "direct"] as const;
+export type ReferralFilter = (typeof REFERRAL_FILTERS)[number];
 
 export const listEnrollmentsSchema = z.object({
   q: z.string().trim().max(SEARCH_MAX, "Search is too long").default(""),
   status: z.enum(STATUS_FILTERS).default("all"),
+  referral: z.enum(REFERRAL_FILTERS).default("all"),
   page: z.coerce.number().int().min(1, "Page starts at 1").default(1),
   limit: z.coerce
     .number()
