@@ -85,6 +85,16 @@ export const createPurchase = (input: {
 export const getPurchase = (id: string): Promise<LambaPurchase> =>
   lambacard(`/purchases/${encodeURIComponent(id)}`);
 
+/** LambaCard's admin-set LBT price, decimal strings. Null until they set one; USD null on old policies. */
+export interface LambaPricing {
+  priceNgnPerLbt: string;
+  priceUsdPerLbt: string | null;
+  currency: "LBT";
+}
+
+/** The same price for sandbox and live keys; new purchases are made at it. */
+export const getPricing = (): Promise<LambaPricing | null> => lambacard("/pricing");
+
 /** How old a signed delivery may be before it is treated as a replay. */
 const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 

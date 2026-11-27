@@ -5,6 +5,7 @@ import {
   getMyRewards,
   getMyWallet,
   getMyWalletBalances,
+  getTokenPrices,
   openMyWallet,
 } from "../controllers/wallet.controller.js";
 import { protect, restrictTo } from "../middlewares/auth.middleware.js";
@@ -17,6 +18,7 @@ router.get("/me", getMyWallet);
 router.get("/me/balances", getMyWalletBalances);
 router.get("/me/rewards", getMyRewards);
 router.get("/me/referral", getMyReferral);
+router.get("/prices", getTokenPrices);
 router.post("/", openMyWallet);
 
 export default router;
