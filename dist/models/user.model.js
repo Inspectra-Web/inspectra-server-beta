@@ -7,6 +7,9 @@ const RESET_EXPIRES_MINUTES = 30;
 const VERIFY_EXPIRES_HOURS = 24;
 /** Reset and verify tokens are mailed raw and stored hashed. Look them up with this. */
 export const hashToken = (token) => createHash("sha256").update(token).digest("hex");
+/** Referral codes: 8 characters with no 0/O or 1/I/L, so one copied by hand survives. */
+export const REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const REFERRAL_CODE = /^[A-HJ-KM-NP-Z2-9]{8}$/;
 const userSchema = new Schema({
     fullname: {
         type: String,
@@ -53,6 +56,7 @@ const userSchema = new Schema({
     // A realtor who opened their account at the course checkout, until the video is
     // finished. Defaults false, so realtors who joined before the course are never locked.
     courseLocked: { type: Boolean, default: false },
+    referralCode: { type: String, trim: true, uppercase: true, unique: true, sparse: true },
     emailVerifyToken: { type: String, select: false },
     emailVerifyExpires: { type: Date, select: false },
     passwordChangedAt: { type: Date, select: false },

@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import envConfig from "../config/env.config.js";
 import AppError from "../error/app.error.js";
 import Course from "../models/course.model.js";
@@ -6,6 +7,7 @@ import User, { hashToken } from "../models/user.model.js";
 import { fingerprint } from "./crypto.service.js";
 import { sendCourseAccess, sendRealtorJoined } from "./email.service.js";
 import { incentiveFor, startIncentive } from "./incentive.service.js";
+import { referrerFor } from "./referral.service.js";
 /**
  * The course link and the registration invite are derived from the enrollment id with the
  * server's key, not drawn at random. The redirect and the webhook both settle most
@@ -32,11 +34,21 @@ export const enrollmentFor = async (flw) => {
         return existing;
     if (flw.status !== "successful")
         return null;
-    const { fullname, email, phone, user } = flw.meta ?? {};
+    const { fullname, email, phone, user, referralCode } = flw.meta ?? {};
     if (!fullname || !email || !phone)
         return null;
     const course = await theCourse();
     console.warn(`Rebuilding enrollment ${flw.tx_ref}: its attempt row was already gone.`);
+    // The money is real, so the row is rebuilt whatever happened to the referral; the log
+    // says so, for an admin to settle the referrer by hand.
+    let referred = null;
+    if (referralCode)
+        try {
+            referred = await referrerFor(referralCode, user ? new Types.ObjectId(user) : undefined);
+        }
+        catch (error) {
+            console.error(`Enrollment ${flw.tx_ref} rebuilt without its referral ${referralCode}: ${error.message}`);
+        }
     return Enrollment.create({
         fullname,
         email,
@@ -44,6 +56,7 @@ export const enrollmentFor = async (flw) => {
         reference: flw.tx_ref,
         amount: course.price,
         ...(user && { registeredUser: user, registeredAt: new Date() }),
+        ...(referred && { referral: referred.referral }),
     });
 };
 /**
@@ -77,7 +90,7 @@ export const creditEnrollment = async (enrollment, flw) => {
     if (flw.currency !== enrollment.currency || flw.amount < enrollment.amount)
         throw new AppError("That payment does not match what was owed.", 400);
     const access = accessFor(enrollment._id);
-    const incentive = incentiveFor(enrollment.amount);
+    const incentive = incentiveFor(enrollment, flw);
     const claimed = await Enrollment.findOneAndUpdate({ _id: enrollment._id, status: "pending" }, {
         $set: {
             status: "paid",
@@ -87,7 +100,7 @@ export const creditEnrollment = async (enrollment, flw) => {
             paidAt: new Date(),
             failureReason: "",
             accessHash: hashToken(access),
-            ...(incentive && { incentive }),
+            incentive,
         },
     }, { returnDocument: "after" });
     if (claimed) {

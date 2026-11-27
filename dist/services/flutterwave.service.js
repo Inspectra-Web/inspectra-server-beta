@@ -58,6 +58,19 @@ export const getRefund = async (id) => {
         throw new Error(`Could not read refund ${id}`);
     return body.data;
 };
+/**
+ * Flutterwave's fee for an NGN bank transfer of this amount, in naira. The reply is
+ * `data: [{ currency, fee_type: "value", fee }]`; the fee can carry three decimals (26.875).
+ */
+export const getTransferFee = async (amount) => {
+    const query = new URLSearchParams({ amount: String(amount), currency: "NGN", type: "account" });
+    const response = await fetch(`${envConfig.FLW_BASE_URL}/transfers/fee?${query}`, { headers });
+    const body = (await response.json().catch(() => ({})));
+    const quote = body.data?.find((entry) => entry.currency === "NGN");
+    if (!response.ok || quote?.fee_type !== "value" || typeof quote.fee !== "number")
+        throw new Error(body.message ?? `Could not read the transfer fee (${response.status})`);
+    return quote.fee;
+};
 /** The transfer as Flutterwave holds it. Trusted over any webhook body. */
 export const getTransfer = async (id) => {
     const response = await fetch(`${envConfig.FLW_BASE_URL}/transfers/${id}`, { headers });

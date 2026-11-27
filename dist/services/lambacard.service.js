@@ -33,6 +33,7 @@ export const createPurchase = (input) => lambacard("/purchases", "POST", {
     fiatAmountMinor: String(input.amountKobo),
     currency: "NGN",
     walletAddress: input.walletAddress,
+    ...(input.referrerAddress && { referrerAddress: input.referrerAddress }),
     // Sandbox only: settle on BSC Testnet instead of simulating. A live key never sends it.
     ...(isSandbox() && envConfig.LAMBACARD_EXECUTE_ON_CHAIN && { executeOnChain: true }),
 });

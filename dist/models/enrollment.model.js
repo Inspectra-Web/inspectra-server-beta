@@ -1,8 +1,14 @@
 import { Schema, model } from "mongoose";
 import validator from "validator";
 export const ENROLLMENT_STATUSES = ["pending", "paid", "completed"];
-/** Naira per paid course that buys the realtor's LambaCard tokens. */
-export const INCENTIVE_PAYOUT = 10_000;
+/** INSPECTRA's share of the course price; Flutterwave's fees come on top, the rest buys tokens. */
+export const INSPECTRA_SHARE = { direct: 0.3, referred: 0.25 };
+/** Planbok debits this per transfer, so it comes off what is forwarded to LambaCard. */
+export const PLANBOK_TRANSFER_FEE = 15;
+/** The admin reward from the Planbok balance, for courses paid before rewards existed. */
+export const LEGACY_PAYOUT = 10_000;
+/** The lowest price that still leaves a direct course's reward above ₦10,000 (₦14,286). */
+export const MIN_COURSE_PRICE = Math.floor(LEGACY_PAYOUT / (1 - INSPECTRA_SHARE.direct)) + 1;
 /** Every incentive transfer is filed under this prefix, which is how the webhook tells them apart. */
 export const INCENTIVE_REFERENCE_PREFIX = "INS-LBT-";
 export const INCENTIVE_STATUSES = [
@@ -20,6 +26,7 @@ const transferSchema = new Schema({
     attempts: { type: Number, default: 0 },
     transferId: { type: Number },
     providerReference: { type: String, trim: true },
+    amount: { type: Number, min: [1, "An amount must be greater than 0"] },
     sentAt: { type: Date },
 }, { _id: false });
 const purchaseSchema = new Schema({
@@ -27,23 +34,33 @@ const purchaseSchema = new Schema({
     status: { type: String, trim: true, required: true },
     walletAddress: { type: String, trim: true, lowercase: true, required: true },
     customerTokenUnits: { type: String, trim: true, default: "0" },
+    referrerAddress: { type: String, trim: true, lowercase: true },
+    referralTokenUnits: { type: String, trim: true },
     transactionHash: { type: String, trim: true },
     explorerUrl: { type: String, trim: true },
     confirmedAt: { type: Date },
 }, { _id: false });
 const incentiveSchema = new Schema({
-    amount: { type: Number, required: true, min: [1, "An amount must be greater than 0"] },
+    amount: { type: Number, min: [1, "An amount must be greater than 0"] },
     status: {
         type: String,
         enum: { values: INCENTIVE_STATUSES, message: "{VALUE} is not a valid payout status" },
         default: "due",
     },
+    kept: { type: Number, min: 0 },
+    collectionFee: { type: Number, min: 0 },
+    transferFee: { type: Number, min: 0 },
     funding: { type: transferSchema, default: () => ({}) },
     fromBalance: { type: Boolean },
     oldPayoutSentAt: { type: Date },
     forwarding: { type: transferSchema },
     purchase: { type: purchaseSchema },
     sentAt: { type: Date },
+}, { _id: false });
+const referralSchema = new Schema({
+    referrer: { type: Schema.Types.ObjectId, ref: "User", required: true, immutable: true },
+    code: { type: String, trim: true, uppercase: true, required: true, immutable: true },
+    walletAddress: { type: String, trim: true, lowercase: true, required: true, immutable: true },
 }, { _id: false });
 const enrollmentSchema = new Schema({
     fullname: { type: String, trim: true, required: [true, "Enter your full name"] },
@@ -79,6 +96,7 @@ const enrollmentSchema = new Schema({
     registeredAt: { type: Date },
     registeredUser: { type: Schema.Types.ObjectId, ref: "User" },
     incentive: { type: incentiveSchema },
+    referral: { type: referralSchema },
 }, { timestamps: true });
 // The secrets are looked up by hash. Sparse: a pending row has neither yet.
 enrollmentSchema.index({ accessHash: 1 }, { unique: true, sparse: true });
@@ -92,6 +110,8 @@ enrollmentSchema.index({ registeredUser: 1, createdAt: -1 });
 enrollmentSchema.index({ "incentive.status": 1 }, { sparse: true });
 // A LambaCard webhook names its purchase.
 enrollmentSchema.index({ "incentive.purchase.id": 1 }, { unique: true, sparse: true });
+// A referrer's own referrals, newest first.
+enrollmentSchema.index({ "referral.referrer": 1, paidAt: -1 }, { sparse: true });
 /** Stamped once, from the id, like a payment's. Mongoose 9 passes no `next`. */
 enrollmentSchema.pre("validate", function () {
     if (!this.reference)
@@ -118,7 +138,7 @@ const incentiveCheck = (incentive) => {
     return null;
 };
 /** The admin table. Secrets and Flutterwave internals stay out. */
-export const adminEnrollment = (e) => ({
+export const adminEnrollment = (e, referrer) => ({
     id: e._id,
     fullname: e.fullname,
     email: e.email,
@@ -130,9 +150,19 @@ export const adminEnrollment = (e) => ({
     completedAt: e.completedAt,
     registered: !!e.registeredAt,
     createdAt: e.createdAt,
+    referral: e.referral && {
+        referrerId: e.referral.referrer,
+        name: referrer?.fullname ?? null,
+        email: referrer?.email ?? null,
+        code: e.referral.code,
+        walletAddress: e.referral.walletAddress,
+    },
     incentive: e.incentive && {
         status: e.incentive.status,
         amount: e.incentive.amount,
+        kept: e.incentive.kept,
+        collectionFee: e.incentive.collectionFee,
+        transferFee: e.incentive.transferFee,
         /** Only on `sent` rows, paid straight to LambaCard before the purchase existed. */
         sentAt: e.incentive.sentAt,
         check: incentiveCheck(e.incentive),
@@ -148,6 +178,7 @@ export const adminEnrollment = (e) => ({
         forwarding: e.incentive.forwarding && {
             reference: e.incentive.forwarding.reference,
             providerReference: e.incentive.forwarding.providerReference,
+            amount: e.incentive.forwarding.amount,
             sentAt: e.incentive.forwarding.sentAt,
         },
         purchase: e.incentive.purchase && {
@@ -155,6 +186,10 @@ export const adminEnrollment = (e) => ({
             status: e.incentive.purchase.status,
             tokens: toTokenAmount(e.incentive.purchase.customerTokenUnits),
             walletAddress: e.incentive.purchase.walletAddress,
+            referrerAddress: e.incentive.purchase.referrerAddress,
+            referralTokens: e.incentive.purchase.referralTokenUnits
+                ? toTokenAmount(e.incentive.purchase.referralTokenUnits)
+                : null,
             transactionHash: e.incentive.purchase.transactionHash,
             explorerUrl: e.incentive.purchase.explorerUrl,
             confirmedAt: e.incentive.purchase.confirmedAt,
